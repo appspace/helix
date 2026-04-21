@@ -36,16 +36,22 @@ export const postQuery: RequestHandler = async (req, res) => {
 
     const columns = fields.map(f => f.name);
     const PRI_KEY_FLAG = 2;
+    const UNIQUE_KEY_FLAG = 4;
     const columnMeta = fields.map(f => {
-      const flagsNum = typeof f.flags === 'number'
-        ? f.flags
-        : Array.isArray(f.flags) && f.flags.includes('PRI_KEY') ? PRI_KEY_FLAG : 0;
+      let flagsNum = 0;
+      if (typeof f.flags === 'number') {
+        flagsNum = f.flags;
+      } else if (Array.isArray(f.flags)) {
+        if (f.flags.includes('PRI_KEY')) flagsNum |= PRI_KEY_FLAG;
+        if (f.flags.includes('UNIQUE_KEY')) flagsNum |= UNIQUE_KEY_FLAG;
+      }
       return {
         name: f.name,
         orgName: f.orgName ?? f.name,
         table: f.table ?? '',
         orgTable: f.orgTable ?? '',
         pk: (flagsNum & PRI_KEY_FLAG) === PRI_KEY_FLAG,
+        unique: (flagsNum & UNIQUE_KEY_FLAG) === UNIQUE_KEY_FLAG,
       };
     });
 

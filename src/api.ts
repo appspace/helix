@@ -13,6 +13,7 @@ export interface ColumnMeta {
   table: string;
   orgTable: string;
   pk: boolean;
+  unique: boolean;
 }
 
 export interface DeleteRowWhere {

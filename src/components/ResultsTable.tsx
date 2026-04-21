@@ -24,15 +24,45 @@ interface ResultsTableProps {
   t: Theme;
 }
 
-function resolveDeleteTarget(row: Row, columnMeta: ColumnMeta[] | undefined): DeleteTarget | null {
-  if (!columnMeta || columnMeta.length === 0) return null;
+interface Deletability {
+  target: DeleteTarget | null;
+  reason: string | null;
+}
+
+function resolveDeleteTarget(row: Row, columnMeta: ColumnMeta[] | undefined): Deletability {
+  if (!columnMeta || columnMeta.length === 0) {
+    return { target: null, reason: 'No column metadata available.' };
+  }
+
   const pkCols = columnMeta.filter(c => c.pk && c.orgTable && c.orgName);
-  if (pkCols.length === 0) return null;
-  const table = pkCols[0].orgTable;
-  if (pkCols.some(c => c.orgTable !== table)) return null;
-  const where = pkCols.map(c => ({ column: c.orgName, value: row[c.name] ?? null }));
-  if (where.some(w => w.value === null)) return null;
-  return { table, where };
+  if (pkCols.length > 0) {
+    const table = pkCols[0].orgTable;
+    if (pkCols.some(c => c.orgTable !== table)) {
+      return { target: null, reason: 'Primary-key columns span multiple tables.' };
+    }
+    const where = pkCols.map(c => ({ column: c.orgName, value: row[c.name] ?? null }));
+    if (where.some(w => w.value === null)) {
+      return { target: null, reason: 'Primary-key column is NULL in this row.' };
+    }
+    return { target: { table, where }, reason: null };
+  }
+
+  const uniqueCol = columnMeta.find(c => c.unique && c.orgTable && c.orgName);
+  if (uniqueCol) {
+    const value = row[uniqueCol.name] ?? null;
+    if (value === null) {
+      return { target: null, reason: `Unique column \`${uniqueCol.orgName}\` is NULL in this row.` };
+    }
+    return {
+      target: { table: uniqueCol.orgTable, where: [{ column: uniqueCol.orgName, value }] },
+      reason: null,
+    };
+  }
+
+  return {
+    target: null,
+    reason: 'No primary or unique key column in the result set. Re-run the query including a key column, or disable SQL_SAFE_UPDATES to delete without one.',
+  };
 }
 
 export function ResultsTable({ results, isRunning, error, executionTime, onDeleteRow, t }: ResultsTableProps) {
@@ -206,13 +236,13 @@ export function ResultsTable({ results, isRunning, error, executionTime, onDelet
       </div>
 
       {contextMenu && (() => {
-        const target = resolveDeleteTarget(contextMenu.row, results.columnMeta);
+        const { target, reason } = resolveDeleteTarget(contextMenu.row, results.columnMeta);
         return (
           <div
             onClick={(e) => e.stopPropagation()}
             style={{
               position: 'fixed', top: contextMenu.y, left: contextMenu.x, zIndex: 100,
-              minWidth: 180, background: t.bgElevated, border: `1px solid ${t.border}`,
+              minWidth: 220, maxWidth: 320, background: t.bgElevated, border: `1px solid ${t.border}`,
               borderRadius: 4, boxShadow: t.shadowMd,
               padding: 4, fontFamily: '"IBM Plex Sans", sans-serif', fontSize: 12,
             }}
@@ -225,7 +255,6 @@ export function ResultsTable({ results, isRunning, error, executionTime, onDelet
                 setContextMenu(null);
                 setDeleteError(null);
               }}
-              title={target ? undefined : 'No primary key detected for this row'}
               style={{
                 width: '100%', textAlign: 'left', padding: '6px 10px', border: 'none',
                 background: 'transparent', color: target ? t.textPrimary : t.textMuted,
@@ -237,6 +266,14 @@ export function ResultsTable({ results, isRunning, error, executionTime, onDelet
             >
               Delete row
             </button>
+            {reason && (
+              <div style={{
+                padding: '6px 10px 4px', fontSize: 11, color: t.textMuted,
+                lineHeight: 1.35, borderTop: `1px solid ${t.borderSubtle}`, marginTop: 2,
+              }}>
+                {reason}
+              </div>
+            )}
           </div>
         );
       })()}
