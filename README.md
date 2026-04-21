@@ -11,6 +11,14 @@ A MySQL database management web app — a browser-based alternative to MySQL Wor
 - Connection manager modal (host, port, user, password, SSL)
 - Dark and light theme toggle
 
+## Security model — local use only
+
+Helix is a **local-first** tool. The backend has **no authentication**: `/api/connect`, `/api/query`, `/api/delete-row`, and `/api/update-cell` are all open to anyone who can reach port `3001`. The MySQL connection pool is a process-wide singleton, so whoever connects last controls what every subsequent request runs — and every request can execute arbitrary SQL against that connection.
+
+**Do not expose the backend (port `3001`) or the Vite dev server to any network you don't fully control.** Bind to `localhost` only, do not put it behind a public reverse proxy, and do not run it with `--host` on a shared or untrusted network. Treat it like a desktop app: if you wouldn't hand someone raw MySQL credentials, don't give them access to this service either.
+
+If you need to share access with others, run a separate instance per person and keep each one on its own machine.
+
 ## Getting started
 
 Install dependencies for both the frontend and the backend:
