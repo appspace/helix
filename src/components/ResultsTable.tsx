@@ -112,6 +112,7 @@ export function ResultsTable({ results, isRunning, error, executionTime, onDelet
   const [deleting, setDeleting] = useState(false);
 
   const [editing, setEditing] = useState<{ row: Row; col: string; draft: string; kind: EditKind; saving: boolean; error: string | null } | null>(null);
+  const [confirmUpdate, setConfirmUpdate] = useState<{ row: Row; target: UpdateCellTarget; error: string | null; saving: boolean } | null>(null);
   const editInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -287,12 +288,13 @@ export function ResultsTable({ results, isRunning, error, executionTime, onDelet
                           t={t}
                           kind={editing!.kind}
                           draft={editing!.draft}
-                          saving={editing!.saving}
+                          saving={editing!.saving || !!confirmUpdate}
                           error={editing!.error}
+                          suspended={!!confirmUpdate}
                           inputRef={editInputRef}
                           onChange={(v) => setEditing(prev => prev ? { ...prev, draft: v } : prev)}
                           onCancel={() => setEditing(null)}
-                          onCommit={async () => {
+                          onCommit={() => {
                             if (!editing || !onUpdateCell) return;
                             const del = resolveDeleteTarget(editing.row, results.columnMeta);
                             if (!del.target) {
@@ -314,18 +316,12 @@ export function ResultsTable({ results, isRunning, error, executionTime, onDelet
                             const currentVal = editing.row[editing.col] ?? null;
                             if (value === currentVal) { setEditing(null); return; }
 
-                            setEditing(prev => prev ? { ...prev, saving: true, error: null } : prev);
-                            try {
-                              await onUpdateCell(editing.row, {
-                                table: del.target.table,
-                                where: del.target.where,
-                                column: editedMeta.orgName,
-                                value,
-                              });
-                              setEditing(null);
-                            } catch (err) {
-                              setEditing(prev => prev ? { ...prev, saving: false, error: err instanceof Error ? err.message : String(err) } : prev);
-                            }
+                            setConfirmUpdate({
+                              row: editing.row,
+                              target: { table: del.target.table, where: del.target.where, column: editedMeta.orgName, value },
+                              error: null,
+                              saving: false,
+                            });
                           }}
                         />
                       ) : (
@@ -468,6 +464,75 @@ export function ResultsTable({ results, isRunning, error, executionTime, onDelet
           </div>
         </div>
       )}
+
+      {confirmUpdate && (
+        <div
+          onClick={() => !confirmUpdate.saving && setConfirmUpdate(null)}
+          style={{
+            position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.5)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: t.bgElevated, border: `1px solid ${t.border}`, borderRadius: 6,
+              padding: 20, minWidth: 460, maxWidth: 640,
+              fontFamily: '"IBM Plex Sans", sans-serif', color: t.textPrimary,
+              boxShadow: '0 10px 40px rgba(0,0,0,0.4)',
+            }}
+          >
+            <h3 style={{ margin: '0 0 10px', fontSize: 14, fontWeight: 600 }}>Update cell?</h3>
+            <p style={{ margin: '0 0 12px', fontSize: 12, color: t.textSecondary }}>This will run:</p>
+            <pre style={{
+              margin: '0 0 14px', padding: '8px 10px', background: t.bgBase,
+              border: `1px solid ${t.borderSubtle}`, borderRadius: 4, fontSize: 11,
+              fontFamily: '"JetBrains Mono", monospace', color: t.textPrimary,
+              whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+            }}>
+{`UPDATE \`${confirmUpdate.target.table}\`\nSET \`${confirmUpdate.target.column}\` = ${confirmUpdate.target.value === null ? 'NULL' : JSON.stringify(confirmUpdate.target.value)}\nWHERE ${confirmUpdate.target.where.map(w => `\`${w.column}\` = ${JSON.stringify(w.value)}`).join(' AND ')}\nLIMIT 1;`}
+            </pre>
+            {confirmUpdate.error && (
+              <div style={{
+                margin: '0 0 12px', padding: '8px 10px', background: t.colorErrorBg,
+                border: `1px solid ${t.colorErrorBorder}`, borderRadius: 4, fontSize: 11,
+                color: t.colorError, fontFamily: 'monospace',
+              }}>{confirmUpdate.error}</div>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button
+                onClick={() => setConfirmUpdate(null)}
+                disabled={confirmUpdate.saving}
+                style={{
+                  padding: '6px 14px', fontSize: 12, fontFamily: 'inherit',
+                  background: 'transparent', color: t.textSecondary,
+                  border: `1px solid ${t.border}`, borderRadius: 4,
+                  cursor: confirmUpdate.saving ? 'not-allowed' : 'pointer',
+                }}
+              >Cancel</button>
+              <button
+                onClick={async () => {
+                  if (!onUpdateCell) { setConfirmUpdate(null); return; }
+                  setConfirmUpdate(prev => prev ? { ...prev, saving: true, error: null } : prev);
+                  try {
+                    await onUpdateCell(confirmUpdate.row, confirmUpdate.target);
+                    setConfirmUpdate(null);
+                    setEditing(null);
+                  } catch (err) {
+                    setConfirmUpdate(prev => prev ? { ...prev, saving: false, error: err instanceof Error ? err.message : String(err) } : prev);
+                  }
+                }}
+                disabled={confirmUpdate.saving}
+                style={{
+                  padding: '6px 14px', fontSize: 12, fontFamily: 'inherit',
+                  background: t.accent, color: '#fff', border: 'none', borderRadius: 4,
+                  cursor: confirmUpdate.saving ? 'wait' : 'pointer', opacity: confirmUpdate.saving ? 0.7 : 1,
+                }}
+              >{confirmUpdate.saving ? 'Updating…' : 'Update'}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -478,13 +543,14 @@ interface CellEditorProps {
   draft: string;
   saving: boolean;
   error: string | null;
+  suspended?: boolean;
   inputRef: MutableRefObject<HTMLInputElement | null>;
   onChange: (v: string) => void;
   onCommit: () => void;
   onCancel: () => void;
 }
 
-function CellEditor({ t, kind, draft, saving, error, inputRef, onChange, onCommit, onCancel }: CellEditorProps) {
+function CellEditor({ t, kind, draft, saving, error, suspended, inputRef, onChange, onCommit, onCancel }: CellEditorProps) {
   const inputType = kind === 'number' ? 'number'
     : kind === 'date' ? 'date'
     : kind === 'datetime' ? 'datetime-local'
@@ -513,7 +579,7 @@ function CellEditor({ t, kind, draft, saving, error, inputRef, onChange, onCommi
           if (e.key === 'Enter') { e.preventDefault(); onCommit(); }
           else if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
         }}
-        onBlur={() => { if (!saving && !error) onCancel(); }}
+        onBlur={() => { if (!saving && !error && !suspended) onCancel(); }}
         style={inputStyle}
       />
       {error && (
