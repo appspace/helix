@@ -1,0 +1,126 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=JetBrains+Mono:ital,wght@0,400;0,500;1,400&display=swap');
+
+:root {
+  --bg-base:        #0B0F14;
+  --bg-surface:     #111720;
+  --bg-elevated:    #171E2A;
+  --bg-overlay:     #1E2736;
+  --bg-input:       #0E1420;
+  --bg-hover:       #FFFFFF0D;
+  --bg-selected:    #00C9B114;
+  --bg-toolbar:     #0E1420;
+
+  --border-subtle:  #1A2233;
+  --border:         #2A3548;
+  --border-strong:  #3A4B63;
+  --border-accent:  #00C9B140;
+
+  --accent:         #00C9B1;
+  --accent-dim:     #009E8C;
+  --accent-bright:  #1DEDD8;
+  --accent-muted:   #00C9B11A;
+
+  --text-primary:   #E2EAF4;
+  --text-secondary: #8896AA;
+  --text-muted:     #4F617A;
+  --text-inverse:   #0B0F14;
+  --text-accent:    #00C9B1;
+  --text-link:      #4D9EF5;
+
+  --color-error:        #F0614A;
+  --color-error-bg:     #F0614A18;
+  --color-error-border: #F0614A40;
+  --color-warning:      #F0A930;
+  --color-success:      #3CCF91;
+  --color-info:         #4D9EF5;
+
+  --font-display: 'Space Grotesk', sans-serif;
+  --font-ui:      'IBM Plex Sans', sans-serif;
+  --font-mono:    'JetBrains Mono', monospace;
+
+  --radius-sm:   3px;
+  --radius-md:   6px;
+  --radius-lg:   10px;
+  --radius-full: 9999px;
+
+  --shadow-sm:  0 1px 2px #00000050;
+  --shadow-md:  0 4px 12px #00000066, 0 1px 3px #00000040;
+  --shadow-lg:  0 12px 32px #00000088, 0 2px 8px #00000055;
+}
+
+[data-theme="light"] {
+  --bg-base:        #EEF1F6;
+  --bg-surface:     #FFFFFF;
+  --bg-elevated:    #F8FAFD;
+  --bg-overlay:     #EDF1F7;
+  --bg-input:       #FFFFFF;
+  --bg-hover:       #00000008;
+  --bg-selected:    #009B8A0F;
+  --bg-toolbar:     #F4F6FA;
+
+  --border-subtle:  #E6EAF2;
+  --border:         #CDD3DF;
+  --border-strong:  #B0BBC8;
+  --border-accent:  #009B8A30;
+
+  --accent:         #007F72;
+  --accent-dim:     #006159;
+  --accent-bright:  #009B8A;
+  --accent-muted:   #007F7212;
+
+  --text-primary:   #111827;
+  --text-secondary: #4B5563;
+  --text-muted:     #9CA3AF;
+  --text-inverse:   #FFFFFF;
+  --text-accent:    #007F72;
+  --text-link:      #1D4ED8;
+
+  --color-error:        #DC2626;
+  --color-error-bg:     #DC262610;
+  --color-error-border: #DC262630;
+  --color-warning:      #B45309;
+  --color-success:      #059669;
+  --color-info:         #1D4ED8;
+
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.08);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.10), 0 1px 3px rgba(0,0,0,0.06);
+  --shadow-lg: 0 12px 32px rgba(0,0,0,0.12), 0 2px 8px rgba(0,0,0,0.08);
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
