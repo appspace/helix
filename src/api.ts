@@ -14,6 +14,8 @@ export interface ColumnMeta {
   orgTable: string;
   pk: boolean;
   unique: boolean;
+  notNull: boolean;
+  mysqlType: number;
 }
 
 export interface DeleteRowWhere {
@@ -63,6 +65,13 @@ export const api = {
     return request<{ affectedRows: number; sql: string }>('/api/delete-row', {
       method: 'POST',
       body: JSON.stringify({ schema, table, where }),
+    });
+  },
+
+  updateCell(schema: string, table: string, where: DeleteRowWhere[], column: string, value: string | number | null) {
+    return request<{ affectedRows: number; changedRows: number; sql: string }>('/api/update-cell', {
+      method: 'POST',
+      body: JSON.stringify({ schema, table, where, column, value }),
     });
   },
 };

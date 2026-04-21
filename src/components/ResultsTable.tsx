@@ -1,4 +1,4 @@
-import { useState, useEffect, CSSProperties } from 'react';
+import { useState, useEffect, useRef, CSSProperties, MutableRefObject } from 'react';
 import type { Theme } from '../theme';
 import type { ColumnMeta } from '../api';
 
@@ -9,10 +9,46 @@ export interface QueryResults {
 }
 
 type Row = Record<string, string | number | null>;
+type CellValue = string | number | null;
 
 interface DeleteTarget {
   table: string;
-  where: { column: string; value: string | number | null }[];
+  where: { column: string; value: CellValue }[];
+}
+
+export interface UpdateCellTarget {
+  table: string;
+  where: { column: string; value: CellValue }[];
+  column: string;
+  value: CellValue;
+}
+
+type EditKind = 'number' | 'date' | 'datetime' | 'time' | 'text';
+
+function editKindForType(type: number): EditKind {
+  // MySQL column type codes
+  switch (type) {
+    case 1: case 2: case 3: case 4: case 5: case 8: case 9: case 13: case 246:
+      return 'number'; // TINYINT, SMALLINT, INT, FLOAT, DOUBLE, BIGINT, MEDIUMINT, YEAR, NEWDECIMAL
+    case 10: case 14:
+      return 'date';
+    case 7: case 12: case 17: case 18:
+      return 'datetime'; // TIMESTAMP, DATETIME
+    case 11: case 19:
+      return 'time';
+    default:
+      return 'text';
+  }
+}
+
+// MySQL datetime looks like "YYYY-MM-DD HH:MM:SS"; <input type="datetime-local"> wants "YYYY-MM-DDTHH:MM".
+function toDatetimeLocal(v: CellValue): string {
+  if (v === null || v === undefined) return '';
+  const s = String(v);
+  return s.replace(' ', 'T').slice(0, 16);
+}
+function fromDatetimeLocal(v: string): string {
+  return v.replace('T', ' ');
 }
 
 interface ResultsTableProps {
@@ -21,6 +57,7 @@ interface ResultsTableProps {
   error: string | null;
   executionTime: number | null;
   onDeleteRow?: (row: Row, target: DeleteTarget) => Promise<void> | void;
+  onUpdateCell?: (row: Row, target: UpdateCellTarget) => Promise<void> | void;
   t: Theme;
 }
 
@@ -65,7 +102,7 @@ function resolveDeleteTarget(row: Row, columnMeta: ColumnMeta[] | undefined): De
   };
 }
 
-export function ResultsTable({ results, isRunning, error, executionTime, onDeleteRow, t }: ResultsTableProps) {
+export function ResultsTable({ results, isRunning, error, executionTime, onDeleteRow, onUpdateCell, t }: ResultsTableProps) {
   const [sortCol, setSortCol] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [selectedRow, setSelectedRow] = useState<number | null>(null);
@@ -73,6 +110,16 @@ export function ResultsTable({ results, isRunning, error, executionTime, onDelet
   const [confirmDelete, setConfirmDelete] = useState<{ row: Row; target: DeleteTarget } | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  const [editing, setEditing] = useState<{ row: Row; col: string; draft: string; kind: EditKind; saving: boolean; error: string | null } | null>(null);
+  const editInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (editing && editInputRef.current) {
+      editInputRef.current.focus();
+      editInputRef.current.select();
+    }
+  }, [editing?.row, editing?.col]);
 
   useEffect(() => {
     if (!contextMenu) return;
@@ -212,11 +259,81 @@ export function ResultsTable({ results, isRunning, error, executionTime, onDelet
                 }}
               >
                 <td style={{ ...s.td, color: t.textMuted, textAlign: 'right', paddingRight: 10, fontSize: 10, fontFamily: 'monospace' }}>{i + 1}</td>
-                {columns.map(col => (
-                  <td key={col} style={cellStyle(row[col] ?? null)}>
-                    {row[col] === null ? <em>NULL</em> : String(row[col])}
-                  </td>
-                ))}
+                {columns.map(col => {
+                  const meta = results.columnMeta?.find(m => m.name === col);
+                  const isEditing = editing && editing.row === row && editing.col === col;
+                  const editable = !!(onUpdateCell && meta && meta.orgTable && meta.orgName && !meta.pk);
+                  return (
+                    <td
+                      key={col}
+                      style={{ ...cellStyle(row[col] ?? null), padding: isEditing ? 0 : undefined }}
+                      onDoubleClick={(e) => {
+                        if (!editable || !meta) return;
+                        e.stopPropagation();
+                        const kind = editKindForType(meta.mysqlType);
+                        const current = row[col];
+                        const draft = current === null || current === undefined
+                          ? ''
+                          : kind === 'datetime' ? toDatetimeLocal(current)
+                          : kind === 'date' ? String(current).slice(0, 10)
+                          : kind === 'time' ? String(current).slice(-8)
+                          : String(current);
+                        setEditing({ row, col, draft, kind, saving: false, error: null });
+                      }}
+                      title={editable ? 'Double-click to edit' : meta?.pk ? 'Primary key — not editable' : undefined}
+                    >
+                      {isEditing ? (
+                        <CellEditor
+                          t={t}
+                          kind={editing!.kind}
+                          draft={editing!.draft}
+                          saving={editing!.saving}
+                          error={editing!.error}
+                          inputRef={editInputRef}
+                          onChange={(v) => setEditing(prev => prev ? { ...prev, draft: v } : prev)}
+                          onCancel={() => setEditing(null)}
+                          onCommit={async () => {
+                            if (!editing || !onUpdateCell) return;
+                            const del = resolveDeleteTarget(editing.row, results.columnMeta);
+                            if (!del.target) {
+                              setEditing(prev => prev ? { ...prev, error: del.reason } : prev);
+                              return;
+                            }
+                            const editedMeta = results.columnMeta?.find(m => m.name === editing.col);
+                            if (!editedMeta || editedMeta.orgTable !== del.target.table) {
+                              setEditing(prev => prev ? { ...prev, error: 'Column does not belong to the same table as the key.' } : prev);
+                              return;
+                            }
+                            const raw = editing.draft;
+                            let value: CellValue;
+                            if (raw === '' && !editedMeta.notNull) value = null;
+                            else if (editing.kind === 'number') value = raw === '' ? '' : Number(raw);
+                            else if (editing.kind === 'datetime') value = raw === '' ? null : fromDatetimeLocal(raw);
+                            else value = raw;
+
+                            const currentVal = editing.row[editing.col] ?? null;
+                            if (value === currentVal) { setEditing(null); return; }
+
+                            setEditing(prev => prev ? { ...prev, saving: true, error: null } : prev);
+                            try {
+                              await onUpdateCell(editing.row, {
+                                table: del.target.table,
+                                where: del.target.where,
+                                column: editedMeta.orgName,
+                                value,
+                              });
+                              setEditing(null);
+                            } catch (err) {
+                              setEditing(prev => prev ? { ...prev, saving: false, error: err instanceof Error ? err.message : String(err) } : prev);
+                            }
+                          }}
+                        />
+                      ) : (
+                        row[col] === null ? <em>NULL</em> : String(row[col])
+                      )}
+                    </td>
+                  );
+                })}
               </tr>
             ))}
           </tbody>
@@ -350,6 +467,64 @@ export function ResultsTable({ results, isRunning, error, executionTime, onDelet
             </div>
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+interface CellEditorProps {
+  t: Theme;
+  kind: EditKind;
+  draft: string;
+  saving: boolean;
+  error: string | null;
+  inputRef: MutableRefObject<HTMLInputElement | null>;
+  onChange: (v: string) => void;
+  onCommit: () => void;
+  onCancel: () => void;
+}
+
+function CellEditor({ t, kind, draft, saving, error, inputRef, onChange, onCommit, onCancel }: CellEditorProps) {
+  const inputType = kind === 'number' ? 'number'
+    : kind === 'date' ? 'date'
+    : kind === 'datetime' ? 'datetime-local'
+    : kind === 'time' ? 'time'
+    : 'text';
+
+  const inputStyle: CSSProperties = {
+    width: '100%', boxSizing: 'border-box',
+    padding: '6px 12px', margin: 0,
+    background: t.bgSurface, color: t.textPrimary,
+    border: `1px solid ${error ? t.colorError : t.accent}`,
+    outline: 'none', borderRadius: 2,
+    fontFamily: '"JetBrains Mono", monospace', fontSize: 12,
+  };
+
+  return (
+    <div style={{ position: 'relative' }} onClick={(e) => e.stopPropagation()}>
+      <input
+        ref={inputRef}
+        type={inputType}
+        value={draft}
+        disabled={saving}
+        step={kind === 'number' ? 'any' : undefined}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') { e.preventDefault(); onCommit(); }
+          else if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+        }}
+        onBlur={() => { if (!saving && !error) onCancel(); }}
+        style={inputStyle}
+      />
+      {error && (
+        <div style={{
+          position: 'absolute', top: '100%', left: 0, zIndex: 10,
+          marginTop: 2, padding: '4px 8px',
+          background: t.colorErrorBg, border: `1px solid ${t.colorErrorBorder}`,
+          borderRadius: 3, color: t.colorError, fontSize: 11,
+          fontFamily: '"IBM Plex Sans", sans-serif', whiteSpace: 'nowrap',
+          boxShadow: t.shadowMd,
+        }}>{error}</div>
       )}
     </div>
   );

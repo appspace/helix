@@ -99,6 +99,19 @@ export default function App() {
     setActiveTable(null);
   };
 
+  const handleUpdateCell = async (
+    row: Record<string, string | number | null>,
+    target: { table: string; where: { column: string; value: string | number | null }[]; column: string; value: string | number | null },
+  ) => {
+    await api.updateCell(activeSchema, target.table, target.where, target.column, target.value);
+    setResults(prev => {
+      if (!prev) return prev;
+      const meta = prev.columnMeta?.find(m => m.orgTable === target.table && m.orgName === target.column);
+      const key = meta?.name ?? target.column;
+      return { ...prev, rows: prev.rows.map(r => r === row ? { ...r, [key]: target.value } : r) };
+    });
+  };
+
   const handleDeleteRow = async (
     row: Record<string, string | number | null>,
     target: { table: string; where: { column: string; value: string | number | null }[] },
@@ -231,6 +244,7 @@ export default function App() {
             error={queryError}
             executionTime={execTime}
             onDeleteRow={handleDeleteRow}
+            onUpdateCell={handleUpdateCell}
             t={t}
           />
         </div>

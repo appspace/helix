@@ -35,6 +35,7 @@ export const postQuery: RequestHandler = async (req, res) => {
     }
 
     const columns = fields.map(f => f.name);
+    const NOT_NULL_FLAG = 1;
     const PRI_KEY_FLAG = 2;
     const UNIQUE_KEY_FLAG = 4;
     const columnMeta = fields.map(f => {
@@ -42,6 +43,7 @@ export const postQuery: RequestHandler = async (req, res) => {
       if (typeof f.flags === 'number') {
         flagsNum = f.flags;
       } else if (Array.isArray(f.flags)) {
+        if (f.flags.includes('NOT_NULL')) flagsNum |= NOT_NULL_FLAG;
         if (f.flags.includes('PRI_KEY')) flagsNum |= PRI_KEY_FLAG;
         if (f.flags.includes('UNIQUE_KEY')) flagsNum |= UNIQUE_KEY_FLAG;
       }
@@ -52,6 +54,8 @@ export const postQuery: RequestHandler = async (req, res) => {
         orgTable: f.orgTable ?? '',
         pk: (flagsNum & PRI_KEY_FLAG) === PRI_KEY_FLAG,
         unique: (flagsNum & UNIQUE_KEY_FLAG) === UNIQUE_KEY_FLAG,
+        notNull: (flagsNum & NOT_NULL_FLAG) === NOT_NULL_FLAG,
+        mysqlType: f.columnType ?? f.type ?? 0,
       };
     });
 
