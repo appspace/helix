@@ -28,6 +28,7 @@ export default function App() {
   const [isConnecting, setIsConnecting] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [connectionName, setConnectionName] = useState('Not connected');
+  const [connectionHost, setConnectionHost] = useState<string | null>(null);
 
   const [schemas, setSchemas] = useState<string[]>([]);
   const [activeSchema, setActiveSchema] = useState('');
@@ -65,7 +66,9 @@ export default function App() {
     try {
       const res = await api.connect(form);
       setConnected(true);
-      setConnectionName(res.connectionName);
+      const friendly = form.name.trim();
+      setConnectionName(friendly || res.connectionName);
+      setConnectionHost(res.connectionName);
 
       const { schemas: list } = await api.schemas();
       const initial = form.database && list.includes(form.database)
@@ -85,6 +88,7 @@ export default function App() {
     try { await api.disconnect(); } catch { /* ignore */ }
     setConnected(false);
     setConnectionName('Not connected');
+    setConnectionHost(null);
     setConnectionError(null);
     setSchemas([]);
     setActiveSchema('');
@@ -191,6 +195,7 @@ export default function App() {
         onNewTab={handleNewTab}
         onCloseTab={handleCloseTab}
         connectionName={connectionName}
+        connectionHost={connectionHost}
         connectionStatus={connected ? 'connected' : 'disconnected'}
         onDisconnect={handleDisconnect}
         themeName={themeName}

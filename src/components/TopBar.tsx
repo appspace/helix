@@ -14,6 +14,7 @@ interface TopBarProps {
   onNewTab: () => void;
   onCloseTab: (id: string) => void;
   connectionName: string;
+  connectionHost?: string | null;
   connectionStatus: 'connected' | 'disconnected' | 'error';
   onDisconnect?: () => void;
   themeName: ThemeName;
@@ -21,7 +22,7 @@ interface TopBarProps {
   t: Theme;
 }
 
-export function TopBar({ tabs, activeTab, onTabChange, onNewTab, onCloseTab, connectionName, connectionStatus, onDisconnect, themeName, onToggleTheme, t }: TopBarProps) {
+export function TopBar({ tabs, activeTab, onTabChange, onNewTab, onCloseTab, connectionName, connectionHost, connectionStatus, onDisconnect, themeName, onToggleTheme, t }: TopBarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const canDisconnect = connectionStatus === 'connected' && !!onDisconnect;
 
@@ -125,7 +126,7 @@ export function TopBar({ tabs, activeTab, onTabChange, onNewTab, onCloseTab, con
           }}
         >
           <div style={{ width: 7, height: 7, borderRadius: '50%', background: statusColor, flexShrink: 0 }}/>
-          <span style={{ fontSize: 11, color: t.textSecondary, fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{connectionName}</span>
+          <span style={{ fontSize: 12, color: t.textSecondary, fontFamily: '"IBM Plex Sans", sans-serif', whiteSpace: 'nowrap', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis' }}>{connectionName}</span>
           {canDisconnect && (
             <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke={t.textMuted} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginLeft: 2 }}>
               <polyline points="6 9 12 15 18 9"/>
@@ -138,11 +139,22 @@ export function TopBar({ tabs, activeTab, onTabChange, onNewTab, onCloseTab, con
             onClick={(e) => e.stopPropagation()}
             style={{
               position: 'absolute', top: '100%', right: 8, marginTop: 4, zIndex: 100,
-              minWidth: 160, background: t.bgElevated, border: `1px solid ${t.border}`,
+              minWidth: 220, background: t.bgElevated, border: `1px solid ${t.border}`,
               borderRadius: 4, boxShadow: t.shadowMd, padding: 4,
               fontFamily: '"IBM Plex Sans", sans-serif', fontSize: 12,
             }}
           >
+            {connectionHost && (
+              <div style={{
+                padding: '8px 10px 10px', borderBottom: `1px solid ${t.borderSubtle}`,
+                marginBottom: 4,
+              }}>
+                {connectionName !== connectionHost && (
+                  <div style={{ fontSize: 11, color: t.textPrimary, fontWeight: 500, whiteSpace: 'nowrap' }}>{connectionName}</div>
+                )}
+                <div style={{ fontSize: 11, color: t.textMuted, fontFamily: 'monospace', marginTop: connectionName !== connectionHost ? 2 : 0, whiteSpace: 'nowrap' }}>{connectionHost}</div>
+              </div>
+            )}
             <button
               onClick={() => { setMenuOpen(false); onDisconnect?.(); }}
               style={{
