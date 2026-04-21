@@ -1,0 +1,91 @@
+import type { RequestHandler } from 'express';
+import mysql from 'mysql2/promise';
+import { getPool } from '../db.js';
+
+export const getSchemas: RequestHandler = async (_req, res) => {
+  try {
+    const pool = getPool();
+    const [rows] = await pool.query<mysql.RowDataPacket[]>(
+      `SELECT SCHEMA_NAME AS name FROM information_schema.SCHEMATA
+       WHERE SCHEMA_NAME NOT IN ('information_schema','performance_schema','mysql','sys')
+       ORDER BY SCHEMA_NAME`
+    );
+    res.json({ schemas: rows.map(r => r['name'] as string) });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: message });
+  }
+};
+
+export const getSchema: RequestHandler = async (req, res) => {
+  const schema = req.query['schema'] as string;
+  if (!schema) {
+    res.status(400).json({ error: 'schema query param is required.' });
+    return;
+  }
+
+  try {
+    const pool = getPool();
+
+    const [tables] = await pool.query<mysql.RowDataPacket[]>(
+      `SELECT TABLE_NAME AS name, TABLE_ROWS AS row_count
+       FROM information_schema.TABLES
+       WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE'
+       ORDER BY TABLE_NAME`,
+      [schema]
+    );
+
+    const [columns] = await pool.query<mysql.RowDataPacket[]>(
+      `SELECT TABLE_NAME AS tbl, COLUMN_NAME AS col, COLUMN_TYPE AS col_type,
+              IF(COLUMN_KEY = 'PRI', 1, 0) AS is_pk
+       FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = ?
+       ORDER BY TABLE_NAME, ORDINAL_POSITION`,
+      [schema]
+    );
+
+    const [views] = await pool.query<mysql.RowDataPacket[]>(
+      `SELECT TABLE_NAME AS name FROM information_schema.VIEWS
+       WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME`,
+      [schema]
+    );
+
+    const [procedures] = await pool.query<mysql.RowDataPacket[]>(
+      `SELECT ROUTINE_NAME AS name FROM information_schema.ROUTINES
+       WHERE ROUTINE_SCHEMA = ? AND ROUTINE_TYPE = 'PROCEDURE'
+       ORDER BY ROUTINE_NAME`,
+      [schema]
+    );
+
+    const [triggers] = await pool.query<mysql.RowDataPacket[]>(
+      `SELECT TRIGGER_NAME AS name FROM information_schema.TRIGGERS
+       WHERE TRIGGER_SCHEMA = ? ORDER BY TRIGGER_NAME`,
+      [schema]
+    );
+
+    const colsByTable = new Map<string, { name: string; type: string; pk: boolean }[]>();
+    for (const col of columns) {
+      const tname = col['tbl'] as string;
+      if (!colsByTable.has(tname)) colsByTable.set(tname, []);
+      colsByTable.get(tname)!.push({
+        name: col['col'] as string,
+        type: col['col_type'] as string,
+        pk: Boolean(col['is_pk']),
+      });
+    }
+
+    res.json({
+      tables: tables.map(t => ({
+        name: t['name'] as string,
+        rows: t['row_count'] as number,
+        columns: colsByTable.get(t['name'] as string) ?? [],
+      })),
+      views: views.map(v => v['name'] as string),
+      procedures: procedures.map(p => p['name'] as string),
+      triggers: triggers.map(t => t['name'] as string),
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: message });
+  }
+};

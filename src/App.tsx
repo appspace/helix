@@ -1,4 +1,4 @@
-import { useState, CSSProperties } from 'react';
+import { useState, useEffect, useCallback, CSSProperties } from 'react';
 import { DARK, LIGHT } from './theme';
 import type { ThemeName } from './theme';
 import { TopBar } from './components/TopBar';
@@ -6,6 +6,8 @@ import { SchemaBrowser } from './components/SchemaBrowser';
 import { QueryEditor } from './components/QueryEditor';
 import { ResultsTable, type QueryResults } from './components/ResultsTable';
 import { ConnectionManager, type ConnectionForm } from './components/ConnectionManager';
+import { api } from './api';
+import type { SchemaData } from './api';
 
 interface Tab {
   id: string;
@@ -14,52 +16,7 @@ interface Tab {
   modified?: boolean;
 }
 
-const MOCK_SCHEMA = {
-  tables: [
-    {
-      name: 'customers',
-      rows: 124839,
-      columns: [
-        { name: 'id', type: 'int(11)', pk: true },
-        { name: 'email', type: 'varchar(255)' },
-        { name: 'name', type: 'varchar(120)' },
-        { name: 'created_at', type: 'datetime' },
-        { name: 'status', type: 'enum' },
-      ],
-    },
-    {
-      name: 'orders',
-      rows: 891204,
-      columns: [
-        { name: 'id', type: 'int(11)', pk: true },
-        { name: 'customer_id', type: 'int(11)' },
-        { name: 'total', type: 'decimal(10,2)' },
-        { name: 'status', type: 'varchar(32)' },
-        { name: 'created_at', type: 'datetime' },
-      ],
-    },
-    { name: 'products', rows: 4211, columns: [{ name: 'id', type: 'int(11)', pk: true }, { name: 'name', type: 'varchar(255)' }, { name: 'price', type: 'decimal(10,2)' }] },
-    { name: 'order_items', rows: 2341098, columns: [{ name: 'id', type: 'int(11)', pk: true }, { name: 'order_id', type: 'int(11)' }, { name: 'product_id', type: 'int(11)' }, { name: 'qty', type: 'int(11)' }] },
-    { name: 'sessions', rows: 44102, columns: [{ name: 'id', type: 'varchar(64)', pk: true }, { name: 'user_id', type: 'int(11)' }, { name: 'expires_at', type: 'datetime' }] },
-  ],
-  views: [],
-  procedures: [],
-  triggers: [],
-};
-
-const MOCK_RESULTS: QueryResults = {
-  columns: ['id', 'email', 'name', 'created_at', 'status'],
-  rows: [
-    { id: 1, email: 'alice@example.com', name: 'Alice Johnson', created_at: '2024-01-15 09:23:11', status: 'active' },
-    { id: 2, email: 'bob@example.com',   name: 'Bob Smith',    created_at: '2024-02-03 14:01:55', status: 'active' },
-    { id: 3, email: 'carol@corp.io',     name: 'Carol White',  created_at: '2024-02-18 07:44:30', status: 'inactive' },
-    { id: 4, email: 'dave@mail.net',     name: 'Dave Brown',   created_at: '2024-03-01 16:12:44', status: 'active' },
-    { id: 5, email: 'eve@example.com',   name: 'Eve Davis',    created_at: '2024-03-11 11:05:02', status: 'suspended' },
-    { id: 6, email: 'frank@corp.io',     name: null,           created_at: '2024-04-02 08:30:19', status: 'active' },
-    { id: 7, email: 'grace@mail.net',    name: 'Grace Lee',    created_at: '2024-04-14 13:55:47', status: 'active' },
-    { id: 8, email: 'henry@example.com', name: 'Henry Wilson', created_at: '2024-05-07 10:20:33', status: 'inactive' },
-  ],
-};
+const EMPTY_SCHEMA: SchemaData = { tables: [], views: [], procedures: [], triggers: [] };
 
 let tabCounter = 1;
 
@@ -72,39 +29,77 @@ export default function App() {
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [connectionName, setConnectionName] = useState('Not connected');
 
+  const [schemas, setSchemas] = useState<string[]>([]);
+  const [activeSchema, setActiveSchema] = useState('');
+  const [schemaData, setSchemaData] = useState<SchemaData>(EMPTY_SCHEMA);
+
   const [tabs, setTabs] = useState<Tab[]>([
-    { id: '1', name: 'query_1.sql', query: 'SELECT *\nFROM customers\nWHERE status = \'active\'\nORDER BY created_at DESC\nLIMIT 50;' },
+    { id: '1', name: 'query_1.sql', query: '' },
   ]);
   const [activeTab, setActiveTab] = useState('1');
   const [results, setResults] = useState<QueryResults | null>(null);
   const [isRunning, setIsRunning] = useState(false);
-  const [queryError] = useState<string | null>(null);
+  const [queryError, setQueryError] = useState<string | null>(null);
   const [execTime, setExecTime] = useState<number | null>(null);
   const [activeTable, setActiveTable] = useState<string | null>(null);
-  const [activeSchema, setActiveSchema] = useState('app_production');
 
   const currentTab = tabs.find(tab => tab.id === activeTab)!;
 
-  const handleConnect = (form: ConnectionForm) => {
+  const loadSchema = useCallback(async (schema: string) => {
+    try {
+      const data = await api.schema(schema);
+      setSchemaData(data);
+    } catch {
+      setSchemaData(EMPTY_SCHEMA);
+    }
+  }, []);
+
+  const handleSchemaChange = useCallback((schema: string) => {
+    setActiveSchema(schema);
+    loadSchema(schema);
+  }, [loadSchema]);
+
+  const handleConnect = async (form: ConnectionForm) => {
     setIsConnecting(true);
     setConnectionError(null);
-    setTimeout(() => {
-      setIsConnecting(false);
+    try {
+      const res = await api.connect(form);
       setConnected(true);
-      setConnectionName(`${form.user}@${form.host}:${form.port}`);
-    }, 1200);
+      setConnectionName(res.connectionName);
+
+      const { schemas: list } = await api.schemas();
+      const initial = form.database && list.includes(form.database)
+        ? form.database
+        : list[0] ?? '';
+      setSchemas(list);
+      setActiveSchema(initial);
+      if (initial) await loadSchema(initial);
+    } catch (err) {
+      setConnectionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsConnecting(false);
+    }
   };
 
-  const handleRun = () => {
-    if (isRunning) { setIsRunning(false); return; }
+  const handleRun = async () => {
+    if (isRunning) return;
+    const sql = currentTab?.query?.trim();
+    if (!sql) return;
+
     setIsRunning(true);
     setResults(null);
-    const start = Date.now();
-    setTimeout(() => {
+    setQueryError(null);
+    setExecTime(null);
+
+    try {
+      const res = await api.query(sql, activeSchema);
+      setResults({ columns: res.columns, rows: res.rows });
+      setExecTime(res.executionTime);
+    } catch (err) {
+      setQueryError(err instanceof Error ? err.message : String(err));
+    } finally {
       setIsRunning(false);
-      setResults(MOCK_RESULTS);
-      setExecTime(Date.now() - start);
-    }, 800);
+    }
   };
 
   const handleQueryChange = (val: string) => {
@@ -117,6 +112,7 @@ export default function App() {
     setTabs(ts => [...ts, { id, name, query }]);
     setActiveTab(id);
     setResults(null);
+    setQueryError(null);
     setExecTime(null);
     return id;
   };
@@ -139,6 +135,7 @@ export default function App() {
   const switchTab = (id: string) => {
     setActiveTab(id);
     setResults(null);
+    setQueryError(null);
     setExecTime(null);
   };
 
@@ -147,6 +144,11 @@ export default function App() {
     setThemeName(next);
     document.documentElement.setAttribute('data-theme', next);
   };
+
+  // Reload schema when switching schemas from the dropdown
+  useEffect(() => {
+    if (connected && activeSchema) loadSchema(activeSchema);
+  }, [activeSchema, connected, loadSchema]);
 
   const appStyle: CSSProperties = {
     display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden',
@@ -172,11 +174,11 @@ export default function App() {
 
       <div style={bodyStyle}>
         <SchemaBrowser
-          schema={MOCK_SCHEMA}
+          schema={schemaData}
           activeTable={activeTable}
           onTableSelect={handleTableSelect}
-          onSchemaChange={setActiveSchema}
-          schemas={['app_production', 'app_staging', 'analytics', 'logs']}
+          onSchemaChange={handleSchemaChange}
+          schemas={schemas}
           activeSchema={activeSchema}
           t={t}
         />
