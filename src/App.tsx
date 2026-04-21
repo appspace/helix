@@ -81,6 +81,17 @@ export default function App() {
     }
   };
 
+  const handleDeleteRow = async (
+    row: Record<string, string | number | null>,
+    target: { table: string; where: { column: string; value: string | number | null }[] },
+  ) => {
+    const result = await api.deleteRow(activeSchema, target.table, target.where);
+    if (result.affectedRows === 0) {
+      throw new Error('No rows were deleted (row may have already been removed).');
+    }
+    setResults(prev => prev ? { ...prev, rows: prev.rows.filter(r => r !== row) } : prev);
+  };
+
   const handleRun = async () => {
     if (isRunning) return;
     const sql = currentTab?.query?.trim();
@@ -93,7 +104,7 @@ export default function App() {
 
     try {
       const res = await api.query(sql, activeSchema);
-      setResults({ columns: res.columns, rows: res.rows });
+      setResults({ columns: res.columns, columnMeta: res.columnMeta, rows: res.rows });
       setExecTime(res.executionTime);
     } catch (err) {
       setQueryError(err instanceof Error ? err.message : String(err));
@@ -199,6 +210,7 @@ export default function App() {
             isRunning={isRunning}
             error={queryError}
             executionTime={execTime}
+            onDeleteRow={handleDeleteRow}
             t={t}
           />
         </div>

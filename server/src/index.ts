@@ -3,6 +3,7 @@ import cors from 'cors';
 import { postConnect, deleteConnect, getStatus } from './routes/connect.js';
 import { getSchemas, getSchema } from './routes/schema.js';
 import { postQuery } from './routes/query.js';
+import { postDeleteRow } from './routes/deleteRow.js';
 
 const app = express();
 const PORT = process.env['PORT'] ?? 3001;
@@ -22,6 +23,7 @@ app.get('/api/schema', getSchema);
 
 // Query
 app.post('/api/query', postQuery);
+app.post('/api/delete-row', postDeleteRow);
 
 app.listen(PORT, () => {
   console.log(`Helix server running at http://localhost:${PORT}`);

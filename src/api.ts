@@ -7,6 +7,19 @@ export interface SchemaData {
   triggers: string[];
 }
 
+export interface ColumnMeta {
+  name: string;
+  orgName: string;
+  table: string;
+  orgTable: string;
+  pk: boolean;
+}
+
+export interface DeleteRowWhere {
+  column: string;
+  value: string | number | null;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...init });
   const body = await res.json() as T & { error?: string };
@@ -39,9 +52,16 @@ export const api = {
   },
 
   query(sql: string, schema: string) {
-    return request<QueryResults & { executionTime: number; affectedRows?: number; insertId?: number }>(
+    return request<QueryResults & { columnMeta?: ColumnMeta[]; executionTime: number; affectedRows?: number; insertId?: number }>(
       '/api/query',
       { method: 'POST', body: JSON.stringify({ sql, schema }) }
     );
+  },
+
+  deleteRow(schema: string, table: string, where: DeleteRowWhere[]) {
+    return request<{ affectedRows: number; sql: string }>('/api/delete-row', {
+      method: 'POST',
+      body: JSON.stringify({ schema, table, where }),
+    });
   },
 };

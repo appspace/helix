@@ -35,6 +35,19 @@ export const postQuery: RequestHandler = async (req, res) => {
     }
 
     const columns = fields.map(f => f.name);
+    const PRI_KEY_FLAG = 2;
+    const columnMeta = fields.map(f => {
+      const flagsNum = typeof f.flags === 'number'
+        ? f.flags
+        : Array.isArray(f.flags) && f.flags.includes('PRI_KEY') ? PRI_KEY_FLAG : 0;
+      return {
+        name: f.name,
+        orgName: f.orgName ?? f.name,
+        table: f.table ?? '',
+        orgTable: f.orgTable ?? '',
+        pk: (flagsNum & PRI_KEY_FLAG) === PRI_KEY_FLAG,
+      };
+    });
 
     // Serialize rows — convert Buffer/Date/BigInt to plain values
     const serialized = rows.map(row => {
@@ -56,7 +69,7 @@ export const postQuery: RequestHandler = async (req, res) => {
       return out;
     });
 
-    res.json({ columns, rows: serialized, executionTime });
+    res.json({ columns, columnMeta, rows: serialized, executionTime });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     res.status(400).json({ error: message });
