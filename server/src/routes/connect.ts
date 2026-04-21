@@ -20,7 +20,9 @@ export const postConnect: RequestHandler = async (req, res) => {
     await connect({ host, port: Number(port) || 3306, user, password, database, ssl });
     res.json({ ok: true, connectionName: `${user}@${host}:${port || 3306}` });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const e = err as { message?: string; code?: string; errno?: number };
+    const parts = [e?.message, e?.code && `(${e.code})`].filter(Boolean);
+    const message = parts.join(' ').trim() || String(err) || 'Unknown connection error';
     res.status(400).json({ error: message });
   }
 };

@@ -31,7 +31,10 @@ export interface DeleteRowWhere {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...init });
   const body = await res.json() as T & { error?: string };
-  if (!res.ok) throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
+  if (!res.ok) {
+    const msg = (body as { error?: string }).error?.trim();
+    throw new Error(msg || `Request failed with HTTP ${res.status}`);
+  }
   return body;
 }
 

@@ -65,20 +65,21 @@ export default function App() {
     setConnectionError(null);
     try {
       const res = await api.connect(form);
-      setConnected(true);
-      const friendly = form.name.trim();
-      setConnectionName(friendly || res.connectionName);
-      setConnectionHost(res.connectionName);
-
       const { schemas: list } = await api.schemas();
       const initial = form.database && list.includes(form.database)
         ? form.database
         : list[0] ?? '';
+      if (initial) await loadSchema(initial);
+
+      const friendly = form.name.trim();
+      setConnectionName(friendly || res.connectionName);
+      setConnectionHost(res.connectionName);
       setSchemas(list);
       setActiveSchema(initial);
-      if (initial) await loadSchema(initial);
+      setConnected(true);
     } catch (err) {
       setConnectionError(err instanceof Error ? err.message : String(err));
+      try { await api.disconnect(); } catch { /* ignore */ }
     } finally {
       setIsConnecting(false);
     }
