@@ -1,7 +1,12 @@
 import type { QueryResults } from './components/ResultsTable';
 
 export interface SchemaData {
-  tables: { name: string; rows: number; columns: { name: string; type: string; pk: boolean }[] }[];
+  tables: {
+    name: string;
+    rows: number;
+    comment: string;
+    columns: { name: string; type: string; pk: boolean; comment: string }[];
+  }[];
   views: string[];
   procedures: string[];
   triggers: string[];

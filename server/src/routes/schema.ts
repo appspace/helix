@@ -28,7 +28,7 @@ export const getSchema: RequestHandler = async (req, res) => {
     const pool = getPool();
 
     const [tables] = await pool.query<mysql.RowDataPacket[]>(
-      `SELECT TABLE_NAME AS name, TABLE_ROWS AS row_count
+      `SELECT TABLE_NAME AS name, TABLE_ROWS AS row_count, TABLE_COMMENT AS comment
        FROM information_schema.TABLES
        WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE'
        ORDER BY TABLE_NAME`,
@@ -37,7 +37,7 @@ export const getSchema: RequestHandler = async (req, res) => {
 
     const [columns] = await pool.query<mysql.RowDataPacket[]>(
       `SELECT TABLE_NAME AS tbl, COLUMN_NAME AS col, COLUMN_TYPE AS col_type,
-              IF(COLUMN_KEY = 'PRI', 1, 0) AS is_pk
+              IF(COLUMN_KEY = 'PRI', 1, 0) AS is_pk, COLUMN_COMMENT AS comment
        FROM information_schema.COLUMNS
        WHERE TABLE_SCHEMA = ?
        ORDER BY TABLE_NAME, ORDINAL_POSITION`,
@@ -63,7 +63,7 @@ export const getSchema: RequestHandler = async (req, res) => {
       [schema]
     );
 
-    const colsByTable = new Map<string, { name: string; type: string; pk: boolean }[]>();
+    const colsByTable = new Map<string, { name: string; type: string; pk: boolean; comment: string }[]>();
     for (const col of columns) {
       const tname = col['tbl'] as string;
       if (!colsByTable.has(tname)) colsByTable.set(tname, []);
@@ -71,6 +71,7 @@ export const getSchema: RequestHandler = async (req, res) => {
         name: col['col'] as string,
         type: col['col_type'] as string,
         pk: Boolean(col['is_pk']),
+        comment: (col['comment'] as string) ?? '',
       });
     }
 
@@ -78,6 +79,7 @@ export const getSchema: RequestHandler = async (req, res) => {
       tables: tables.map(t => ({
         name: t['name'] as string,
         rows: t['row_count'] as number,
+        comment: (t['comment'] as string) ?? '',
         columns: colsByTable.get(t['name'] as string) ?? [],
       })),
       views: views.map(v => v['name'] as string),

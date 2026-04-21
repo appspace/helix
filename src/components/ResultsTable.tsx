@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, CSSProperties, MutableRefObject } from 'react';
 import type { Theme } from '../theme';
-import type { ColumnMeta } from '../api';
+import type { ColumnMeta, SchemaData } from '../api';
 
 export interface QueryResults {
   columns: string[];
@@ -56,9 +56,17 @@ interface ResultsTableProps {
   isRunning: boolean;
   error: string | null;
   executionTime: number | null;
+  schemaData?: SchemaData;
   onDeleteRow?: (row: Row, target: DeleteTarget) => Promise<void> | void;
   onUpdateCell?: (row: Row, target: UpdateCellTarget) => Promise<void> | void;
   t: Theme;
+}
+
+function commentFor(schemaData: SchemaData | undefined, meta: ColumnMeta | undefined): string | undefined {
+  if (!schemaData || !meta?.orgTable || !meta.orgName) return undefined;
+  const table = schemaData.tables.find(x => x.name === meta.orgTable);
+  const col = table?.columns.find(c => c.name === meta.orgName);
+  return col?.comment || undefined;
 }
 
 interface Deletability {
@@ -102,7 +110,7 @@ function resolveDeleteTarget(row: Row, columnMeta: ColumnMeta[] | undefined): De
   };
 }
 
-export function ResultsTable({ results, isRunning, error, executionTime, onDeleteRow, onUpdateCell, t }: ResultsTableProps) {
+export function ResultsTable({ results, isRunning, error, executionTime, schemaData, onDeleteRow, onUpdateCell, t }: ResultsTableProps) {
   const [sortCol, setSortCol] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [selectedRow, setSelectedRow] = useState<number | null>(null);
@@ -233,8 +241,11 @@ export function ResultsTable({ results, isRunning, error, executionTime, onDelet
           <thead>
             <tr>
               <th style={{ ...s.th, width: 40, textAlign: 'right', paddingRight: 10, cursor: 'default' }}>#</th>
-              {columns.map(col => (
-                <th key={col} style={col === sortCol ? { ...s.th, color: t.accent } : s.th} onClick={() => handleSort(col)}>
+              {columns.map(col => {
+                const hMeta = results.columnMeta?.find(m => m.name === col);
+                const hComment = commentFor(schemaData, hMeta);
+                return (
+                <th key={col} style={col === sortCol ? { ...s.th, color: t.accent } : s.th} onClick={() => handleSort(col)} title={hComment}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                     {col}
                     {sortCol === col && (
@@ -244,7 +255,8 @@ export function ResultsTable({ results, isRunning, error, executionTime, onDelet
                     )}
                   </div>
                 </th>
-              ))}
+                );
+              })}
             </tr>
           </thead>
           <tbody>
@@ -281,7 +293,11 @@ export function ResultsTable({ results, isRunning, error, executionTime, onDelet
                           : String(current);
                         setEditing({ row, col, draft, kind, saving: false, error: null });
                       }}
-                      title={editable ? 'Double-click to edit' : meta?.pk ? 'Primary key — not editable' : undefined}
+                      title={(() => {
+                        const comment = commentFor(schemaData, meta);
+                        const hint = editable ? 'Double-click to edit' : meta?.pk ? 'Primary key — not editable' : undefined;
+                        return [comment, hint].filter(Boolean).join(' — ') || undefined;
+                      })()}
                     >
                       {isEditing ? (
                         <CellEditor

@@ -5,11 +5,13 @@ interface Column {
   name: string;
   type: string;
   pk?: boolean;
+  comment?: string;
 }
 
 interface Table {
   name: string;
   rows: number | string;
+  comment?: string;
   columns?: Column[];
 }
 
@@ -106,6 +108,7 @@ export function SchemaBrowser({ schema, activeTable, onTableSelect, onSchemaChan
                 <div
                   style={{ ...s.tableRow, ...(activeTable === table.name ? s.tableRowActive : {}) }}
                   onClick={() => { onTableSelect(table.name); toggleTable(table.name); }}
+                  title={table.comment || undefined}
                 >
                   <Chevron open={!!expandedTables[table.name]} color={t.textMuted}/>
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={activeTable === table.name ? t.accent : t.textMuted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{flexShrink:0}}>
@@ -118,7 +121,7 @@ export function SchemaBrowser({ schema, activeTable, onTableSelect, onSchemaChan
                 </div>
 
                 {expandedTables[table.name] && table.columns?.map(col => (
-                  <div key={col.name} style={s.colRow}>
+                  <div key={col.name} style={s.colRow} title={col.comment || undefined}>
                     <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={col.pk ? t.colorInfo : t.textMuted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{flexShrink:0}}>
                       {col.pk
                         ? <><circle cx="12" cy="8" r="4"/><path d="M12 12v8M9 18h6"/></>
