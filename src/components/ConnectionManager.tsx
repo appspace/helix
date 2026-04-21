@@ -20,8 +20,11 @@ interface ConnectionManagerProps {
 
 export function ConnectionManager({ onConnect, isConnecting, error, t }: ConnectionManagerProps) {
   const [form, setForm] = useState<ConnectionForm>({
-    name: 'Local MySQL', host: 'localhost', port: '3306',
-    user: 'root', password: '', database: '', ssl: false,
+    name: 'Local MySQL',
+    host: import.meta.env['VITE_DEFAULT_HOST'] ?? 'localhost',
+    port: import.meta.env['VITE_DEFAULT_PORT'] ?? '3306',
+    user: import.meta.env['VITE_DEFAULT_USER'] ?? 'root',
+    password: '', database: '', ssl: false,
   });
   const set = <K extends keyof ConnectionForm>(k: K, v: ConnectionForm[K]) =>
     setForm(p => ({ ...p, [k]: v }));
