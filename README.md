@@ -13,14 +13,33 @@ A MySQL database management web app — a browser-based alternative to MySQL Wor
 
 ## Getting started
 
+Install dependencies for both the frontend and the backend:
+
 ```bash
 npm install
-npm run dev
+npm install --prefix server
 ```
 
-The app runs at `http://localhost:5173` (or the next available port).
+Create the server env file from the example:
 
-To build for production:
+```bash
+cp server/.env.example server/.env
+```
+
+Note: `server/.env.example` ships with `CORS_ORIGIN=http://localhost:5174`, but Vite defaults to `5173`. Set `CORS_ORIGIN=http://localhost:5173` in `server/.env` unless you've overridden Vite's port.
+
+Run the frontend and backend together:
+
+```bash
+npm run dev:all
+```
+
+- Frontend (Vite): `http://localhost:5173`
+- Backend (Express + mysql2): `http://localhost:3001`
+
+You can also start them individually with `npm run dev` (frontend only) or `npm run dev:server` (backend only).
+
+To build the frontend for production:
 
 ```bash
 npm run build
@@ -33,6 +52,7 @@ npm run build
 | Framework | React 19 |
 | Language | TypeScript (strict, `verbatimModuleSyntax`) |
 | Build | Vite 8 + esbuild |
+| Backend | Express 4 + mysql2, run with `tsx watch` |
 | Node | 24 LTS |
 
 ## Project structure
