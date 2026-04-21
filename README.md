@@ -1,73 +1,58 @@
-# React + TypeScript + Vite
+# Helix
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A MySQL database management web app — a browser-based alternative to MySQL Workbench. Built with React, TypeScript, and Vite. Designed to run locally (e.g. inside a Docker container) and accessed at `localhost`.
 
-Currently, two official plugins are available:
+## What it does
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- SQL query editor with line numbers and `Ctrl+Enter` to run
+- Schema browser — collapsible tree of tables, columns (with types and PK indicators), views, procedures, triggers
+- Query results grid — sortable columns, row selection, NULL highlighting, execution time
+- Multi-tab query workspace
+- Connection manager modal (host, port, user, password, SSL)
+- Dark and light theme toggle
 
-## React Compiler
+## Getting started
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm install
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+The app runs at `http://localhost:5173` (or the next available port).
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+To build for production:
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm run build
 ```
+
+## Tech stack
+
+| Layer | Tool |
+|---|---|
+| Framework | React 19 |
+| Language | TypeScript (strict, `verbatimModuleSyntax`) |
+| Build | Vite 8 + esbuild |
+| Node | 24 LTS |
+
+## Project structure
+
+```
+src/
+├── App.tsx                     # App shell, state, mock data
+├── theme.ts                    # DARK and LIGHT token objects (colors, shadows, SQL palette)
+├── index.css                   # CSS custom properties (design tokens), Google Fonts, resets
+└── components/
+    ├── TopBar.tsx              # Tab bar, logo, theme toggle, connection status
+    ├── SchemaBrowser.tsx       # Left sidebar — schema selector, filter, collapsible tree
+    ├── QueryEditor.tsx         # SQL textarea with line numbers and toolbar
+    ├── ResultsTable.tsx        # Sortable data grid with status bar
+    └── ConnectionManager.tsx   # Connection modal (host/port/user/password/SSL)
+```
+
+## Design system
+
+The visual design is defined in two places:
+
+- **`src/index.css`** — all CSS custom properties: background layers, border levels, accent teal, text hierarchy, semantic colors (error/warning/success), SQL syntax colors, typography scale, spacing, radii, shadows
+- **`src/theme.ts`** — the same tokens as a TypeScript object (`DARK` / `LIGHT`), passed as a `t` prop to every component for inline styles
