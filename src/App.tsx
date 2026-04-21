@@ -81,6 +81,20 @@ export default function App() {
     }
   };
 
+  const handleDisconnect = async () => {
+    try { await api.disconnect(); } catch { /* ignore */ }
+    setConnected(false);
+    setConnectionName('Not connected');
+    setConnectionError(null);
+    setSchemas([]);
+    setActiveSchema('');
+    setSchemaData(EMPTY_SCHEMA);
+    setResults(null);
+    setQueryError(null);
+    setExecTime(null);
+    setActiveTable(null);
+  };
+
   const handleDeleteRow = async (
     row: Record<string, string | number | null>,
     target: { table: string; where: { column: string; value: string | number | null }[] },
@@ -178,6 +192,7 @@ export default function App() {
         onCloseTab={handleCloseTab}
         connectionName={connectionName}
         connectionStatus={connected ? 'connected' : 'disconnected'}
+        onDisconnect={handleDisconnect}
         themeName={themeName}
         onToggleTheme={toggleTheme}
         t={t}

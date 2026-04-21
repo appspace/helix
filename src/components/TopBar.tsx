@@ -1,4 +1,4 @@
-import { CSSProperties } from 'react';
+import { CSSProperties, useEffect, useState } from 'react';
 import type { Theme, ThemeName } from '../theme';
 
 interface Tab {
@@ -15,15 +15,30 @@ interface TopBarProps {
   onCloseTab: (id: string) => void;
   connectionName: string;
   connectionStatus: 'connected' | 'disconnected' | 'error';
+  onDisconnect?: () => void;
   themeName: ThemeName;
   onToggleTheme: () => void;
   t: Theme;
 }
 
-export function TopBar({ tabs, activeTab, onTabChange, onNewTab, onCloseTab, connectionName, connectionStatus, themeName, onToggleTheme, t }: TopBarProps) {
+export function TopBar({ tabs, activeTab, onTabChange, onNewTab, onCloseTab, connectionName, connectionStatus, onDisconnect, themeName, onToggleTheme, t }: TopBarProps) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const canDisconnect = connectionStatus === 'connected' && !!onDisconnect;
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const close = () => setMenuOpen(false);
+    const key = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+    window.addEventListener('click', close);
+    window.addEventListener('keydown', key);
+    return () => {
+      window.removeEventListener('click', close);
+      window.removeEventListener('keydown', key);
+    };
+  }, [menuOpen]);
   const root: CSSProperties = {
     height: 40, background: t.bgToolbar, borderBottom: `1px solid ${t.border}`,
-    display: 'flex', alignItems: 'center', flexShrink: 0, overflow: 'hidden',
+    display: 'flex', alignItems: 'center', flexShrink: 0,
   };
   const logoArea: CSSProperties = {
     width: 48, display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -94,9 +109,60 @@ export function TopBar({ tabs, activeTab, onTabChange, onNewTab, onCloseTab, con
 
       <div style={{ width: 1, height: 18, background: t.borderSubtle }}/>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '0 14px', flexShrink: 0 }}>
-        <div style={{ width: 7, height: 7, borderRadius: '50%', background: statusColor, flexShrink: 0 }}/>
-        <span style={{ fontSize: 11, color: t.textSecondary, fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{connectionName}</span>
+      <div style={{ position: 'relative', flexShrink: 0 }}>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            if (canDisconnect) setMenuOpen(v => !v);
+          }}
+          disabled={!canDisconnect}
+          title={canDisconnect ? 'Connection menu' : undefined}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 7, padding: '0 14px',
+            height: '100%', background: menuOpen ? t.bgSurface : 'transparent',
+            border: 'none', cursor: canDisconnect ? 'pointer' : 'default',
+            alignSelf: 'stretch',
+          }}
+        >
+          <div style={{ width: 7, height: 7, borderRadius: '50%', background: statusColor, flexShrink: 0 }}/>
+          <span style={{ fontSize: 11, color: t.textSecondary, fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{connectionName}</span>
+          {canDisconnect && (
+            <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke={t.textMuted} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginLeft: 2 }}>
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
+          )}
+        </button>
+
+        {menuOpen && (
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              position: 'absolute', top: '100%', right: 8, marginTop: 4, zIndex: 100,
+              minWidth: 160, background: t.bgElevated, border: `1px solid ${t.border}`,
+              borderRadius: 4, boxShadow: t.shadowMd, padding: 4,
+              fontFamily: '"IBM Plex Sans", sans-serif', fontSize: 12,
+            }}
+          >
+            <button
+              onClick={() => { setMenuOpen(false); onDisconnect?.(); }}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                width: '100%', textAlign: 'left', padding: '6px 10px',
+                border: 'none', background: 'transparent', color: t.textPrimary,
+                cursor: 'pointer', borderRadius: 3, fontSize: 12, fontFamily: 'inherit',
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = t.bgHover; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                <polyline points="16 17 21 12 16 7"/>
+                <line x1="21" y1="12" x2="9" y2="12"/>
+              </svg>
+              Log Out
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
