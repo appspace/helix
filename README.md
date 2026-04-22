@@ -2,6 +2,8 @@
 
 A MySQL database management web app — a browser-based alternative to MySQL Workbench. Built with React, TypeScript, and Vite. Designed to run locally (e.g. inside a Docker container) and accessed at `localhost`.
 
+![Helix walkthrough — connect, browse, query, edit, insert](docs/demo.gif)
+
 ## What it does
 
 - SQL query editor with line numbers and `Ctrl+Enter` to run
