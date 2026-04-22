@@ -9,6 +9,7 @@ import { ConnectionManager, type ConnectionForm } from './components/ConnectionM
 import { api } from './api';
 import type { SchemaData } from './api';
 import { saveConnection } from './savedConnections';
+import { addHistoryEntry, listHistory, deleteHistoryEntry, clearHistory, type HistoryEntry } from './queryHistory';
 
 interface Tab {
   id: string;
@@ -30,6 +31,7 @@ export default function App() {
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [connectionName, setConnectionName] = useState('Not connected');
   const [connectionHost, setConnectionHost] = useState<string | null>(null);
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
 
   const [schemas, setSchemas] = useState<string[]>([]);
   const [activeSchema, setActiveSchema] = useState('');
@@ -75,6 +77,7 @@ export default function App() {
       const friendly = form.name.trim();
       setConnectionName(friendly || res.connectionName);
       setConnectionHost(res.connectionName);
+      setHistory(listHistory(res.connectionName));
       setSchemas(list);
       setActiveSchema(initial);
       setConnected(true);
@@ -103,6 +106,7 @@ export default function App() {
     setConnected(false);
     setConnectionName('Not connected');
     setConnectionHost(null);
+    setHistory([]);
     setConnectionError(null);
     setSchemas([]);
     setActiveSchema('');
@@ -165,15 +169,46 @@ export default function App() {
     setQueryError(null);
     setExecTime(null);
 
+    const started = Date.now();
     try {
       const res = await api.query(sql, activeSchema);
       setResults({ columns: res.columns, columnMeta: res.columnMeta, rows: res.rows });
       setExecTime(res.executionTime);
+      if (connectionHost) {
+        const entry = addHistoryEntry(connectionHost, {
+          sql, schema: activeSchema, executedAt: started,
+          durationMs: res.executionTime, status: 'ok', rowCount: res.rows.length,
+        });
+        if (entry) setHistory(prev => [entry, ...prev].slice(0, 100));
+      }
     } catch (err) {
-      setQueryError(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      setQueryError(message);
+      if (connectionHost) {
+        const entry = addHistoryEntry(connectionHost, {
+          sql, schema: activeSchema, executedAt: started,
+          durationMs: Date.now() - started, status: 'error', error: message,
+        });
+        if (entry) setHistory(prev => [entry, ...prev].slice(0, 100));
+      }
     } finally {
       setIsRunning(false);
     }
+  };
+
+  const handleReopenHistory = (entry: HistoryEntry) => {
+    addTab(`history_${entry.id.slice(0, 8)}.sql`, entry.sql);
+  };
+
+  const handleDeleteHistoryEntry = (id: string) => {
+    if (!connectionHost) return;
+    setHistory(deleteHistoryEntry(connectionHost, id));
+  };
+
+  const handleClearHistory = () => {
+    if (!connectionHost) return;
+    clearHistory(connectionHost);
+    setHistory([]);
   };
 
   const handleQueryChange = (val: string) => {
@@ -267,6 +302,10 @@ export default function App() {
               onRun={handleRun}
               isRunning={isRunning}
               activeSchema={activeSchema}
+              history={history}
+              onReopenHistory={handleReopenHistory}
+              onDeleteHistoryEntry={handleDeleteHistoryEntry}
+              onClearHistory={handleClearHistory}
               t={t}
             />
           </div>
