@@ -58,6 +58,7 @@ interface ResultsTableProps {
   isRunning: boolean;
   error: string | null;
   executionTime: number | null;
+  activeSchema?: string;
   schemaData?: SchemaData;
   onDeleteRow?: (row: Row, target: DeleteTarget) => Promise<void> | void;
   onUpdateCell?: (row: Row, target: UpdateCellTarget) => Promise<void> | void;
@@ -113,7 +114,7 @@ function resolveDeleteTarget(row: Row, columnMeta: ColumnMeta[] | undefined): De
   };
 }
 
-export function ResultsTable({ results, isRunning, error, executionTime, schemaData, onDeleteRow, onUpdateCell, onInsertRow, t }: ResultsTableProps) {
+export function ResultsTable({ results, isRunning, error, executionTime, activeSchema, schemaData, onDeleteRow, onUpdateCell, onInsertRow, t }: ResultsTableProps) {
   const [sortCol, setSortCol] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [selectedRow, setSelectedRow] = useState<number | null>(null);
@@ -126,6 +127,19 @@ export function ResultsTable({ results, isRunning, error, executionTime, schemaD
   const [confirmUpdate, setConfirmUpdate] = useState<{ row: Row; target: UpdateCellTarget; error: string | null; saving: boolean } | null>(null);
   const [insertOpen, setInsertOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+
+  // Column layout: order and widths
+  const [colOrder, setColOrder] = useState<string[]>([]);
+  const [colWidths, setColWidths] = useState<Record<string, number>>({});
+  const [resizingCol, setResizingCol] = useState<string | null>(null);
+  const [dragSrc, setDragSrc] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState<string | null>(null);
+  const resizeRef = useRef<{ col: string; startX: number; startWidth: number } | null>(null);
+  // Refs so event-handler closures always see the latest values
+  const colWidthsRef = useRef(colWidths);
+  const colOrderRef  = useRef(colOrder);
+  useEffect(() => { colWidthsRef.current = colWidths; }, [colWidths]);
+  useEffect(() => { colOrderRef.current  = colOrder;  }, [colOrder]);
 
   useEffect(() => {
     if (!exportOpen) return;
@@ -162,6 +176,64 @@ export function ResultsTable({ results, isRunning, error, executionTime, schemaD
       window.removeEventListener('keydown', key);
     };
   }, [contextMenu]);
+
+  // Persist layout only when the result comes from a single identifiable table
+  const persistKey = (() => {
+    if (!activeSchema || !results?.columnMeta?.length) return null;
+    const tables = new Set(results.columnMeta.map(c => c.orgTable).filter(Boolean));
+    if (tables.size !== 1) return null;
+    return `helix.grid-layout.${activeSchema}.${[...tables][0]}`;
+  })();
+
+  const saveLayout = (order: string[], widths: Record<string, number>) => {
+    if (!persistKey) return;
+    try { localStorage.setItem(persistKey, JSON.stringify({ order, widths })); } catch {}
+  };
+
+  // Sync column order/widths when the result set changes
+  useEffect(() => {
+    if (!results) { setColOrder([]); setColWidths({}); return; }
+    const cols = results.columns;
+    let order = cols;
+    let widths: Record<string, number> = {};
+    if (persistKey) {
+      try {
+        const raw = localStorage.getItem(persistKey);
+        if (raw) {
+          const saved = JSON.parse(raw) as { order?: string[]; widths?: Record<string, number> };
+          if (saved.order) {
+            const inResult = new Set(cols);
+            const known = saved.order.filter(c => inResult.has(c));
+            const novel = cols.filter(c => !saved.order!.includes(c));
+            order = [...known, ...novel];
+          }
+          if (saved.widths) widths = saved.widths;
+        }
+      } catch {}
+    }
+    setColOrder(order);
+    setColWidths(widths);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [results, persistKey]);
+
+  // Global cursor override while resizing
+  useEffect(() => {
+    if (!resizingCol) return;
+    const prev = document.body.style.cursor;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    return () => { document.body.style.cursor = prev; document.body.style.userSelect = ''; };
+  }, [resizingCol]);
+
+  // Columns in their current display order
+  const displayCols = (() => {
+    const cols = results?.columns ?? [];
+    if (colOrder.length === 0) return cols;
+    const set = new Set(cols);
+    const known = colOrder.filter(c => set.has(c));
+    const novel = cols.filter(c => !new Set(known).has(c));
+    return [...known, ...novel];
+  })();
 
   const s = {
     root: { display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden', background: t.bgBase } as CSSProperties,
@@ -321,20 +393,91 @@ export function ResultsTable({ results, isRunning, error, executionTime, schemaD
           <thead>
             <tr>
               <th style={{ ...s.th, width: 40, textAlign: 'right', paddingRight: 10, cursor: 'default' }}>#</th>
-              {columns.map(col => {
+              {displayCols.map(col => {
                 const hMeta = results.columnMeta?.find(m => m.name === col);
                 const hComment = commentFor(schemaData, hMeta);
+                const w = colWidths[col];
+                const isDragSrc  = dragSrc  === col;
+                const isDragOver = dragOver === col && dragSrc !== col;
                 return (
-                <th key={col} style={col === sortCol ? { ...s.th, color: t.accent } : s.th} onClick={() => handleSort(col)} title={hComment}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                    {col}
-                    {sortCol === col && (
-                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={t.accent} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                        {sortDir === 'asc' ? <polyline points="18 15 12 9 6 15"/> : <polyline points="6 9 12 15 18 9"/>}
-                      </svg>
-                    )}
-                  </div>
-                </th>
+                  <th
+                    key={col}
+                    draggable
+                    onDragStart={(e) => {
+                      if (resizeRef.current) { e.preventDefault(); return; }
+                      setDragSrc(col);
+                      e.dataTransfer.effectAllowed = 'move';
+                      e.dataTransfer.setData('text/plain', col);
+                    }}
+                    onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDragOver(col); }}
+                    onDragLeave={() => setDragOver(null)}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      const src = e.dataTransfer.getData('text/plain');
+                      setDragSrc(null); setDragOver(null);
+                      if (!src || src === col) return;
+                      setColOrder(prev => {
+                        const next = [...prev.length ? prev : (results?.columns ?? [])];
+                        const si = next.indexOf(src), di = next.indexOf(col);
+                        if (si === -1 || di === -1) return prev;
+                        next.splice(si, 1); next.splice(di, 0, src);
+                        setTimeout(() => saveLayout(next, colWidthsRef.current), 0);
+                        return next;
+                      });
+                    }}
+                    onDragEnd={() => { setDragSrc(null); setDragOver(null); }}
+                    onClick={() => { if (!resizeRef.current) handleSort(col); }}
+                    title={hComment}
+                    style={{
+                      ...s.th,
+                      position: 'relative',
+                      cursor: resizingCol ? 'col-resize' : 'grab',
+                      overflow: 'hidden',
+                      ...(w ? { width: w, minWidth: w } : { minWidth: 80 }),
+                      ...(col === sortCol ? { color: t.accent } : {}),
+                      ...(isDragOver ? { boxShadow: `inset 2px 0 0 ${t.accent}` } : {}),
+                      ...(isDragSrc  ? { opacity: 0.4 } : {}),
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 5, overflow: 'hidden', paddingRight: 4 }}>
+                      {col}
+                      {sortCol === col && (
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={t.accent} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                          {sortDir === 'asc' ? <polyline points="18 15 12 9 6 15"/> : <polyline points="6 9 12 15 18 9"/>}
+                        </svg>
+                      )}
+                    </div>
+                    {/* Resize handle */}
+                    <div
+                      onMouseDown={(e) => {
+                        e.preventDefault(); e.stopPropagation();
+                        const th = (e.currentTarget as HTMLElement).closest('th') as HTMLTableCellElement;
+                        const startWidth = th.getBoundingClientRect().width;
+                        resizeRef.current = { col, startX: e.clientX, startWidth };
+                        setResizingCol(col);
+                        const onMove = (ev: MouseEvent) => {
+                          if (!resizeRef.current) return;
+                          const newW = Math.max(60, resizeRef.current.startWidth + ev.clientX - resizeRef.current.startX);
+                          setColWidths(prev => ({ ...prev, [resizeRef.current!.col]: newW }));
+                        };
+                        const onUp = () => {
+                          resizeRef.current = null; setResizingCol(null);
+                          saveLayout(colOrderRef.current, colWidthsRef.current);
+                          document.removeEventListener('mousemove', onMove);
+                          document.removeEventListener('mouseup', onUp);
+                        };
+                        document.addEventListener('mousemove', onMove);
+                        document.addEventListener('mouseup', onUp);
+                      }}
+                      style={{
+                        position: 'absolute', right: 0, top: 0, bottom: 0, width: 5,
+                        cursor: 'col-resize', zIndex: 2,
+                        background: resizingCol === col ? t.accent : 'transparent',
+                      }}
+                      onMouseEnter={e => { if (!resizingCol) (e.currentTarget as HTMLElement).style.background = t.borderStrong; }}
+                      onMouseLeave={e => { if (!resizingCol) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+                    />
+                  </th>
                 );
               })}
             </tr>
@@ -352,7 +495,7 @@ export function ResultsTable({ results, isRunning, error, executionTime, schemaD
                 }}
               >
                 <td style={{ ...s.td, color: t.textMuted, textAlign: 'right', paddingRight: 10, fontSize: 10, fontFamily: 'monospace' }}>{i + 1}</td>
-                {columns.map(col => {
+                {displayCols.map(col => {
                   const meta = results.columnMeta?.find(m => m.name === col);
                   const isEditing = editing && editing.row === row && editing.col === col;
                   const editable = !!(onUpdateCell && meta && meta.orgTable && meta.orgName && !meta.pk);
