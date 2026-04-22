@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, CSSProperties, MutableRefObject } from 're
 import type { Theme } from '../theme';
 import type { ColumnMeta, SchemaData } from '../api';
 import { InsertRowDialog } from './InsertRowDialog';
+import { rowsToCsv, rowsToJson, downloadBlob, sanitizeFilename } from '../export';
 
 export interface QueryResults {
   columns: string[];
@@ -124,6 +125,19 @@ export function ResultsTable({ results, isRunning, error, executionTime, schemaD
   const [editing, setEditing] = useState<{ row: Row; col: string; draft: string; kind: EditKind; saving: boolean; error: string | null } | null>(null);
   const [confirmUpdate, setConfirmUpdate] = useState<{ row: Row; target: UpdateCellTarget; error: string | null; saving: boolean } | null>(null);
   const [insertOpen, setInsertOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+
+  useEffect(() => {
+    if (!exportOpen) return;
+    const close = () => setExportOpen(false);
+    const key = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+    window.addEventListener('click', close);
+    window.addEventListener('keydown', key);
+    return () => {
+      window.removeEventListener('click', close);
+      window.removeEventListener('keydown', key);
+    };
+  }, [exportOpen]);
   const editInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -215,6 +229,22 @@ export function ResultsTable({ results, isRunning, error, executionTime, schemaD
 
   const formatExecTime = (ms: number) => ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(2)}s`;
 
+  const exportBaseName = (() => {
+    if (!results?.columnMeta) return 'results';
+    const orgTables = new Set(results.columnMeta.map(c => c.orgTable).filter(Boolean));
+    return orgTables.size === 1 ? sanitizeFilename([...orgTables][0]) : 'results';
+  })();
+
+  const exportAs = (format: 'csv' | 'json') => {
+    if (!results) return;
+    const content = format === 'csv'
+      ? rowsToCsv(results.columns, sorted)
+      : rowsToJson(sorted);
+    const mime = format === 'csv' ? 'text/csv' : 'application/json';
+    downloadBlob(content, mime, `${exportBaseName}.${format}`);
+    setExportOpen(false);
+  };
+
   // Determine if the current result set maps to a single source table so we can offer "New row"
   const insertTarget = (() => {
     if (!results?.columnMeta || results.columnMeta.length === 0) return null;
@@ -254,12 +284,36 @@ export function ResultsTable({ results, isRunning, error, executionTime, schemaD
             New row
           </button>
         )}
-        <button style={s.exportBtn}>
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
-          </svg>
-          Export
-        </button>
+        <div style={{ position: 'relative' }}>
+          <button
+            style={{ ...s.exportBtn, opacity: results ? 1 : 0.5, cursor: results ? 'pointer' : 'not-allowed' }}
+            onClick={(e) => { e.stopPropagation(); if (results) setExportOpen(o => !o); }}
+            disabled={!results}
+            title={results ? 'Export current results' : 'Run a query first'}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            Export
+            <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginLeft: 2 }}>
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
+          </button>
+          {exportOpen && (
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                position: 'absolute', top: '100%', right: 0, marginTop: 4, zIndex: 100,
+                minWidth: 180, background: t.bgElevated, border: `1px solid ${t.border}`,
+                borderRadius: 4, boxShadow: t.shadowMd, padding: 4,
+                fontFamily: '"IBM Plex Sans", sans-serif', fontSize: 12,
+              }}
+            >
+              <ExportMenuItem t={t} label="CSV" hint={`${exportBaseName}.csv`} onClick={() => exportAs('csv')} />
+              <ExportMenuItem t={t} label="JSON" hint={`${exportBaseName}.json`} onClick={() => exportAs('json')} />
+            </div>
+          )}
+        </div>
       </div>
 
       <div style={s.tableWrap}>
@@ -589,6 +643,25 @@ export function ResultsTable({ results, isRunning, error, executionTime, schemaD
         />
       )}
     </div>
+  );
+}
+
+function ExportMenuItem({ t, label, hint, onClick }: { t: Theme; label: string; hint: string; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
+        width: '100%', textAlign: 'left', padding: '6px 10px',
+        border: 'none', background: 'transparent', color: t.textPrimary,
+        cursor: 'pointer', borderRadius: 3, fontSize: 12, fontFamily: 'inherit',
+      }}
+      onMouseEnter={(e) => { e.currentTarget.style.background = t.bgHover; }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+    >
+      <span>{label}</span>
+      <span style={{ fontSize: 10, color: t.textMuted, fontFamily: 'monospace' }}>{hint}</span>
+    </button>
   );
 }
 
