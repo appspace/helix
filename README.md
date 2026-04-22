@@ -84,3 +84,7 @@ The visual design is defined in two places:
 
 - **`src/index.css`** — all CSS custom properties: background layers, border levels, accent teal, text hierarchy, semantic colors (error/warning/success), SQL syntax colors, typography scale, spacing, radii, shadows
 - **`src/theme.ts`** — the same tokens as a TypeScript object (`DARK` / `LIGHT`), passed as a `t` prop to every component for inline styles
+
+## License
+
+Helix is licensed under the [GNU Affero General Public License v3.0](LICENSE). You're free to use, modify, and redistribute it, including commercially — but if you run a modified version as a network-accessible service, you must publish your source changes under the same license.
