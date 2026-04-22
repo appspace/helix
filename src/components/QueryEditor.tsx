@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, CSSProperties } from 'react';
 import type { Theme } from '../theme';
 import type { HistoryEntry } from '../queryHistory';
+import type { SavedQuery } from '../savedQueries';
 
 interface QueryEditorProps {
   value: string;
@@ -12,6 +13,11 @@ interface QueryEditorProps {
   onReopenHistory?: (entry: HistoryEntry) => void;
   onDeleteHistoryEntry?: (id: string) => void;
   onClearHistory?: () => void;
+  savedQueries?: SavedQuery[];
+  onSaveQuery?: (name: string, sql: string, schema: string) => void;
+  onDeleteSavedQuery?: (id: string) => void;
+  onRenameSavedQuery?: (id: string, name: string) => void;
+  onReopenSavedQuery?: (query: SavedQuery) => void;
   t: Theme;
 }
 
@@ -31,9 +37,9 @@ function oneLine(sql: string, max = 120): string {
   return s.length > max ? s.slice(0, max - 1) + '…' : s;
 }
 
-const ToolBtn = ({ title, onClick, children, t }: { title: string; onClick?: () => void; children: React.ReactNode; t: Theme }) => (
+const ToolBtn = ({ title, onClick, active, children, t }: { title: string; onClick?: () => void; active?: boolean; children: React.ReactNode; t: Theme }) => (
   <button
-    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, background: 'none', border: 'none', borderRadius: 5, cursor: 'pointer', color: t.textMuted }}
+    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, background: active ? t.bgSurface : 'none', border: 'none', borderRadius: 5, cursor: 'pointer', color: active ? t.textPrimary : t.textMuted }}
     title={title}
     onClick={onClick}
   >
@@ -44,27 +50,83 @@ const ToolBtn = ({ title, onClick, children, t }: { title: string; onClick?: () 
 export function QueryEditor({
   value, onChange, onRun, isRunning, activeSchema,
   history = [], onReopenHistory, onDeleteHistoryEntry, onClearHistory,
+  savedQueries = [], onSaveQuery, onDeleteSavedQuery, onRenameSavedQuery, onReopenSavedQuery,
   t,
 }: QueryEditorProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
   const [historyOpen, setHistoryOpen] = useState(false);
   const historyAnchorRef = useRef<HTMLDivElement>(null);
+
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [saveName, setSaveName] = useState('');
+  const saveAnchorRef = useRef<HTMLDivElement>(null);
+  const saveInputRef = useRef<HTMLInputElement>(null);
+
+  const [savedOpen, setSavedOpen] = useState(false);
+  const savedAnchorRef = useRef<HTMLDivElement>(null);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const renameInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!historyOpen) return;
     const onClick = (e: MouseEvent) => {
-      if (historyAnchorRef.current && !historyAnchorRef.current.contains(e.target as Node)) {
+      if (historyAnchorRef.current && !historyAnchorRef.current.contains(e.target as Node))
         setHistoryOpen(false);
-      }
     };
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setHistoryOpen(false); };
     window.addEventListener('click', onClick);
     window.addEventListener('keydown', onKey);
-    return () => {
-      window.removeEventListener('click', onClick);
-      window.removeEventListener('keydown', onKey);
-    };
+    return () => { window.removeEventListener('click', onClick); window.removeEventListener('keydown', onKey); };
   }, [historyOpen]);
+
+  useEffect(() => {
+    if (!saveOpen) return;
+    const onClick = (e: MouseEvent) => {
+      if (saveAnchorRef.current && !saveAnchorRef.current.contains(e.target as Node))
+        setSaveOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setSaveOpen(false); };
+    window.addEventListener('click', onClick);
+    window.addEventListener('keydown', onKey);
+    return () => { window.removeEventListener('click', onClick); window.removeEventListener('keydown', onKey); };
+  }, [saveOpen]);
+
+  useEffect(() => {
+    if (!savedOpen) return;
+    const onClick = (e: MouseEvent) => {
+      if (savedAnchorRef.current && !savedAnchorRef.current.contains(e.target as Node)) {
+        setSavedOpen(false); setRenamingId(null);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { setSavedOpen(false); setRenamingId(null); } };
+    window.addEventListener('click', onClick);
+    window.addEventListener('keydown', onKey);
+    return () => { window.removeEventListener('click', onClick); window.removeEventListener('keydown', onKey); };
+  }, [savedOpen]);
+
+  useEffect(() => {
+    if (saveOpen) { saveInputRef.current?.focus(); saveInputRef.current?.select(); }
+  }, [saveOpen]);
+
+  useEffect(() => {
+    if (renamingId) renameInputRef.current?.focus();
+  }, [renamingId]);
+
+  const handleSave = () => {
+    const name = saveName.trim();
+    if (!name || !onSaveQuery) return;
+    onSaveQuery(name, value, activeSchema);
+    setSaveOpen(false);
+    setSaveName('');
+  };
+
+  const handleRenameCommit = (id: string) => {
+    const name = renameValue.trim();
+    if (name) onRenameSavedQuery?.(id, name);
+    setRenamingId(null);
+  };
 
   const now = Date.now();
 
@@ -95,6 +157,13 @@ export function QueryEditor({
     lineNums: { background: t.bgToolbar, borderRight: `1px solid ${t.borderSubtle}`, padding: '12px 0', minWidth: 40, textAlign: 'right', userSelect: 'none', flexShrink: 0, overflowY: 'hidden' } as CSSProperties,
     lineNum: { padding: '0 10px', fontSize: 11, lineHeight: '21px', color: t.textMuted, fontFamily: '"JetBrains Mono", monospace' } as CSSProperties,
     textarea: { flex: 1, background: 'transparent', border: 'none', outline: 'none', resize: 'none', padding: '12px 16px', color: t.textPrimary, fontFamily: '"JetBrains Mono", monospace', fontSize: 13, lineHeight: '21px', caretColor: t.accent, overflowY: 'auto' } as CSSProperties,
+    panel: {
+      position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 100,
+      width: 440, maxHeight: 400, overflowY: 'auto',
+      background: t.bgElevated, border: `1px solid ${t.border}`,
+      borderRadius: 6, boxShadow: t.shadowLg, padding: 4,
+      fontFamily: '"IBM Plex Sans", sans-serif', fontSize: 12,
+    } as CSSProperties,
   };
 
   return (
@@ -113,11 +182,154 @@ export function QueryEditor({
             <line x1="21" y1="10" x2="7" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="21" y1="18" x2="7" y2="18"/>
           </svg>
         </ToolBtn>
-        <ToolBtn title="Save query" t={t}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>
-          </svg>
-        </ToolBtn>
+
+        {/* Save query button + popover */}
+        <div ref={saveAnchorRef} style={{ position: 'relative' }}>
+          <ToolBtn
+            title="Save query"
+            active={saveOpen}
+            t={t}
+            onClick={() => { setSaveOpen(o => !o); setSavedOpen(false); }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>
+            </svg>
+          </ToolBtn>
+          {saveOpen && (
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 100,
+                width: 280, background: t.bgElevated, border: `1px solid ${t.border}`,
+                borderRadius: 6, boxShadow: t.shadowLg, padding: 12,
+                fontFamily: '"IBM Plex Sans", sans-serif', fontSize: 12,
+              }}
+            >
+              <div style={{ fontWeight: 600, color: t.textPrimary, marginBottom: 8 }}>Save query</div>
+              <input
+                ref={saveInputRef}
+                value={saveName}
+                onChange={(e) => setSaveName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') { e.preventDefault(); handleSave(); }
+                  else if (e.key === 'Escape') setSaveOpen(false);
+                }}
+                placeholder="Query name"
+                style={{
+                  width: '100%', boxSizing: 'border-box', padding: '6px 8px', marginBottom: 8,
+                  background: t.bgBase, color: t.textPrimary,
+                  border: `1px solid ${t.border}`, borderRadius: 3, outline: 'none',
+                  fontSize: 12, fontFamily: 'inherit',
+                }}
+              />
+              <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                <button
+                  onClick={() => setSaveOpen(false)}
+                  style={{ padding: '4px 10px', fontSize: 11, fontFamily: 'inherit', background: 'transparent', color: t.textMuted, border: `1px solid ${t.border}`, borderRadius: 3, cursor: 'pointer' }}
+                >Cancel</button>
+                <button
+                  onClick={handleSave}
+                  disabled={!saveName.trim()}
+                  style={{ padding: '4px 10px', fontSize: 11, fontFamily: 'inherit', background: t.accent, color: '#fff', border: 'none', borderRadius: 3, cursor: saveName.trim() ? 'pointer' : 'not-allowed', opacity: saveName.trim() ? 1 : 0.5 }}
+                >Save</button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Saved queries browser */}
+        <div ref={savedAnchorRef} style={{ position: 'relative' }}>
+          <ToolBtn
+            title={savedQueries.length > 0 ? `Saved queries (${savedQueries.length})` : 'Saved queries — empty'}
+            active={savedOpen}
+            t={t}
+            onClick={() => { setSavedOpen(o => !o); setSaveOpen(false); setRenamingId(null); }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+            </svg>
+          </ToolBtn>
+          {savedOpen && (
+            <div role="listbox" style={s.panel}>
+              {savedQueries.length === 0 && (
+                <div style={{ padding: '14px 12px', fontSize: 12, color: t.textMuted, fontStyle: 'italic' }}>
+                  No saved queries for this connection.
+                </div>
+              )}
+              {savedQueries.map(q => (
+                <div
+                  key={q.id}
+                  style={{ padding: '8px 10px', borderRadius: 4, borderLeft: `3px solid ${t.accent}`, marginBottom: 2 }}
+                  onMouseEnter={(e) => { if (renamingId !== q.id) e.currentTarget.style.background = t.bgHover; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                >
+                  {renamingId === q.id ? (
+                    <input
+                      ref={renameInputRef}
+                      value={renameValue}
+                      onChange={(e) => setRenameValue(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') { e.preventDefault(); handleRenameCommit(q.id); }
+                        else if (e.key === 'Escape') { e.preventDefault(); setRenamingId(null); }
+                      }}
+                      onBlur={() => handleRenameCommit(q.id)}
+                      style={{
+                        width: '100%', boxSizing: 'border-box', padding: '3px 6px', marginBottom: 4,
+                        background: t.bgBase, color: t.textPrimary,
+                        border: `1px solid ${t.accent}`, borderRadius: 3, outline: 'none',
+                        fontSize: 12, fontFamily: 'inherit',
+                      }}
+                    />
+                  ) : (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 3 }}>
+                      <span style={{ fontWeight: 600, color: t.textPrimary, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {q.name}
+                      </span>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setRenamingId(q.id); setRenameValue(q.name); }}
+                        title="Rename"
+                        style={{ border: 'none', background: 'transparent', color: t.textMuted, cursor: 'pointer', padding: 2, lineHeight: 1, display: 'flex', alignItems: 'center' }}
+                        onMouseEnter={(e) => { e.currentTarget.style.color = t.textPrimary; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.color = t.textMuted; }}
+                      >
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                        </svg>
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); onDeleteSavedQuery?.(q.id); }}
+                        title="Delete"
+                        style={{ border: 'none', background: 'transparent', color: t.textMuted, cursor: 'pointer', padding: '2px 4px', fontSize: 13, lineHeight: 1 }}
+                        onMouseEnter={(e) => { e.currentTarget.style.color = t.colorError; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.color = t.textMuted; }}
+                      >×</button>
+                    </div>
+                  )}
+                  <div style={{ fontFamily: '"JetBrains Mono", monospace', fontSize: 11, color: t.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginBottom: 4 }}>
+                    {oneLine(q.sql)}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 10, color: t.textMuted }}>
+                    <span style={{ fontFamily: 'monospace' }}>{q.schema || '—'}</span>
+                    <span>·</span>
+                    <span>{formatRelative(q.savedAt, now)}</span>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onReopenSavedQuery?.(q); setSavedOpen(false); }}
+                      style={{
+                        marginLeft: 'auto', padding: '2px 8px', fontSize: 10, fontFamily: 'inherit',
+                        background: t.bgSurface, color: t.textSecondary,
+                        border: `1px solid ${t.border}`, borderRadius: 3, cursor: 'pointer',
+                      }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = t.accent; e.currentTarget.style.color = '#fff'; e.currentTarget.style.borderColor = t.accent; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = t.bgSurface; e.currentTarget.style.color = t.textSecondary; e.currentTarget.style.borderColor = t.border; }}
+                    >Open</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* History */}
         <div ref={historyAnchorRef} style={{ position: 'relative' }}>
           <button
             onClick={() => setHistoryOpen(o => !o)}
@@ -165,10 +377,7 @@ export function QueryEditor({
                     fontFamily: '"JetBrains Mono", monospace', fontSize: 11.5, lineHeight: 1.4,
                     color: t.textPrimary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
                   }}>{oneLine(entry.sql)}</div>
-                  <div style={{
-                    display: 'flex', alignItems: 'center', gap: 8,
-                    fontSize: 10, color: t.textMuted,
-                  }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 10, color: t.textMuted }}>
                     <span>{formatRelative(entry.executedAt, now)}</span>
                     <span>·</span>
                     <span style={{ fontFamily: 'monospace' }}>{entry.schema || '—'}</span>
@@ -198,11 +407,7 @@ export function QueryEditor({
                 <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '4px 6px', borderTop: `1px solid ${t.borderSubtle}`, marginTop: 4 }}>
                   <button
                     onClick={() => { onClearHistory(); setHistoryOpen(false); }}
-                    style={{
-                      padding: '4px 10px', fontSize: 11, fontFamily: 'inherit',
-                      background: 'transparent', color: t.textMuted,
-                      border: 'none', borderRadius: 3, cursor: 'pointer',
-                    }}
+                    style={{ padding: '4px 10px', fontSize: 11, fontFamily: 'inherit', background: 'transparent', color: t.textMuted, border: 'none', borderRadius: 3, cursor: 'pointer' }}
                     onMouseEnter={(e) => { e.currentTarget.style.color = t.colorError; }}
                     onMouseLeave={(e) => { e.currentTarget.style.color = t.textMuted; }}
                   >Clear history</button>
@@ -211,6 +416,7 @@ export function QueryEditor({
             </div>
           )}
         </div>
+
         <div style={{ flex: 1 }}/>
         <span style={s.schemaPill}>
           <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
