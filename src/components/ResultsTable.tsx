@@ -127,6 +127,9 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
   const [confirmUpdate, setConfirmUpdate] = useState<{ row: Row; target: UpdateCellTarget; error: string | null; saving: boolean } | null>(null);
   const [insertOpen, setInsertOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [selectedCol, setSelectedCol] = useState<number | null>(null);
+  const rowRefs = useRef<(HTMLTableRowElement | null)[]>([]);
+  const tableWrapRef = useRef<HTMLDivElement>(null);
   const [filterOpen, setFilterOpen] = useState(false);
   const [filterText, setFilterText] = useState('');
   const filterInputRef = useRef<HTMLInputElement | null>(null);
@@ -234,6 +237,11 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
     setColWidths(widths);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [results, persistKey]);
+
+  useEffect(() => { setSelectedRow(null); setSelectedCol(null); }, [results]);
+  useEffect(() => {
+    if (selectedRow !== null) rowRefs.current[selectedRow]?.scrollIntoView({ block: 'nearest' });
+  }, [selectedRow]);
 
   // Global cursor override while resizing
   useEffect(() => {
@@ -467,7 +475,96 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
         </div>
       )}
 
-      <div style={s.tableWrap}>
+      <div
+        ref={tableWrapRef}
+        tabIndex={0}
+        style={{ ...s.tableWrap, outline: 'none' }}
+        onKeyDown={(e) => {
+          if (editing || confirmDelete || confirmUpdate) return;
+          const rowCount = filtered.length;
+          const colCount = displayCols.length;
+          if (!rowCount) return;
+          switch (e.key) {
+            case 'ArrowDown': {
+              e.preventDefault();
+              setSelectedRow(prev => Math.min(prev === null ? 0 : prev + 1, rowCount - 1));
+              if (selectedCol === null) setSelectedCol(0);
+              break;
+            }
+            case 'ArrowUp': {
+              e.preventDefault();
+              setSelectedRow(prev => Math.max(prev === null ? 0 : prev - 1, 0));
+              if (selectedCol === null) setSelectedCol(0);
+              break;
+            }
+            case 'ArrowRight': {
+              e.preventDefault();
+              if (selectedRow === null) { setSelectedRow(0); setSelectedCol(0); break; }
+              setSelectedCol(prev => Math.min(prev === null ? 0 : prev + 1, colCount - 1));
+              break;
+            }
+            case 'ArrowLeft': {
+              e.preventDefault();
+              if (selectedRow === null) { setSelectedRow(0); setSelectedCol(0); break; }
+              setSelectedCol(prev => Math.max(prev === null ? 0 : prev - 1, 0));
+              break;
+            }
+            case 'Home': {
+              e.preventDefault();
+              if (selectedRow === null) break;
+              setSelectedCol(0);
+              break;
+            }
+            case 'End': {
+              e.preventDefault();
+              if (selectedRow === null) break;
+              setSelectedCol(colCount - 1);
+              break;
+            }
+            case 'PageUp': {
+              e.preventDefault();
+              const wrap = tableWrapRef.current;
+              if (!wrap) break;
+              const page = Math.max(1, Math.floor(wrap.clientHeight / (wrap.scrollHeight / rowCount)));
+              setSelectedRow(prev => Math.max(0, (prev ?? 0) - page));
+              if (selectedCol === null) setSelectedCol(0);
+              break;
+            }
+            case 'PageDown': {
+              e.preventDefault();
+              const wrap = tableWrapRef.current;
+              if (!wrap) break;
+              const page = Math.max(1, Math.floor(wrap.clientHeight / (wrap.scrollHeight / rowCount)));
+              setSelectedRow(prev => Math.min(rowCount - 1, (prev ?? 0) + page));
+              if (selectedCol === null) setSelectedCol(0);
+              break;
+            }
+            case 'Enter': {
+              if (selectedRow === null || selectedCol === null) break;
+              const row = filtered[selectedRow];
+              const col = displayCols[selectedCol];
+              const meta = results.columnMeta?.find(m => m.name === col);
+              const editable = !!(onUpdateCell && meta && meta.orgTable && meta.orgName && !meta.pk);
+              if (!editable || !meta) break;
+              e.preventDefault();
+              const kind = editKindForType(meta.mysqlType);
+              const current = row[col];
+              const draft = current === null || current === undefined ? ''
+                : kind === 'datetime' ? toDatetimeLocal(current)
+                : kind === 'date' ? String(current).slice(0, 10)
+                : kind === 'time' ? String(current).slice(-8)
+                : String(current);
+              setEditing({ row, col, draft, kind, saving: false, error: null });
+              break;
+            }
+            case 'Escape': {
+              setSelectedRow(null);
+              setSelectedCol(null);
+              break;
+            }
+          }
+        }}
+      >
         <table style={s.table}>
           <thead>
             <tr>
@@ -565,23 +662,31 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
             {filtered.map((row, i) => (
               <tr
                 key={i}
+                ref={(el) => { rowRefs.current[i] = el; }}
                 style={{ ...s.tr, background: selectedRow === i ? t.bgSelected : i % 2 === 0 ? 'transparent' : t.bgHover }}
-                onClick={() => setSelectedRow(i === selectedRow ? null : i)}
+                onClick={() => { setSelectedRow(i); setSelectedCol(null); tableWrapRef.current?.focus(); }}
                 onContextMenu={(e) => {
                   e.preventDefault();
                   setSelectedRow(i);
+                  setSelectedCol(null);
                   setContextMenu({ x: e.clientX, y: e.clientY, row });
                 }}
               >
                 <td style={{ ...s.td, color: t.textMuted, textAlign: 'right', paddingRight: 10, fontSize: 10, fontFamily: 'monospace' }}>{i + 1}</td>
-                {displayCols.map(col => {
+                {displayCols.map((col, colIdx) => {
                   const meta = results.columnMeta?.find(m => m.name === col);
                   const isEditing = editing && editing.row === row && editing.col === col;
                   const editable = !!(onUpdateCell && meta && meta.orgTable && meta.orgName && !meta.pk);
+                  const isFocusedCell = selectedRow === i && selectedCol === colIdx && !isEditing;
                   return (
                     <td
                       key={col}
-                      style={{ ...cellStyle(row[col] ?? null), padding: isEditing ? 0 : undefined }}
+                      onClick={(e) => { e.stopPropagation(); setSelectedRow(i); setSelectedCol(colIdx); tableWrapRef.current?.focus(); }}
+                      style={{
+                        ...cellStyle(row[col] ?? null),
+                        padding: isEditing ? 0 : undefined,
+                        ...(isFocusedCell ? { boxShadow: `inset 0 0 0 2px ${t.accent}` } : {}),
+                      }}
                       onDoubleClick={(e) => {
                         if (!editable || !meta) return;
                         e.stopPropagation();
@@ -667,7 +772,9 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
         <span style={s.stat}><strong style={{ color: t.textSecondary }}>{columns.length}</strong> columns</span>
         {selectedRow !== null && <>
           <span style={s.statDiv}/>
-          <span style={{ ...s.stat, color: t.accent }}>Row {selectedRow + 1} selected</span>
+          <span style={{ ...s.stat, color: t.accent }}>
+            Row {selectedRow + 1}{selectedCol !== null ? ` · ${displayCols[selectedCol]}` : ''}
+          </span>
         </>}
       </div>
 
