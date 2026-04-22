@@ -10,6 +10,7 @@ import { api } from './api';
 import type { SchemaData } from './api';
 import { saveConnection } from './savedConnections';
 import { addHistoryEntry, listHistory, deleteHistoryEntry, clearHistory, type HistoryEntry } from './queryHistory';
+import { listSavedQueries, saveQuery, deleteSavedQuery, renameSavedQuery, type SavedQuery } from './savedQueries';
 
 interface Tab {
   id: string;
@@ -32,6 +33,7 @@ export default function App() {
   const [connectionName, setConnectionName] = useState('Not connected');
   const [connectionHost, setConnectionHost] = useState<string | null>(null);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [savedQueries, setSavedQueries] = useState<SavedQuery[]>([]);
 
   const [schemas, setSchemas] = useState<string[]>([]);
   const [activeSchema, setActiveSchema] = useState('');
@@ -78,6 +80,7 @@ export default function App() {
       setConnectionName(friendly || res.connectionName);
       setConnectionHost(res.connectionName);
       setHistory(listHistory(res.connectionName));
+      setSavedQueries(listSavedQueries(res.connectionName));
       setSchemas(list);
       setActiveSchema(initial);
       setConnected(true);
@@ -107,6 +110,7 @@ export default function App() {
     setConnectionName('Not connected');
     setConnectionHost(null);
     setHistory([]);
+    setSavedQueries([]);
     setConnectionError(null);
     setSchemas([]);
     setActiveSchema('');
@@ -219,6 +223,26 @@ export default function App() {
     setHistory([]);
   };
 
+  const handleSaveQuery = (name: string, sql: string, schema: string) => {
+    if (!connectionHost) return;
+    const entry = saveQuery(connectionHost, { name, sql, schema });
+    setSavedQueries(prev => [entry, ...prev]);
+  };
+
+  const handleDeleteSavedQuery = (id: string) => {
+    if (!connectionHost) return;
+    setSavedQueries(deleteSavedQuery(connectionHost, id));
+  };
+
+  const handleRenameSavedQuery = (id: string, name: string) => {
+    if (!connectionHost) return;
+    setSavedQueries(renameSavedQuery(connectionHost, id, name));
+  };
+
+  const handleReopenSavedQuery = (query: SavedQuery) => {
+    addTab(`${query.name}.sql`, query.sql);
+  };
+
   const handleQueryChange = (val: string) => {
     setTabs(ts => ts.map(tab => tab.id === activeTab ? { ...tab, query: val, modified: true } : tab));
   };
@@ -315,6 +339,11 @@ export default function App() {
               onReopenHistory={handleReopenHistory}
               onDeleteHistoryEntry={handleDeleteHistoryEntry}
               onClearHistory={handleClearHistory}
+              savedQueries={savedQueries}
+              onSaveQuery={handleSaveQuery}
+              onDeleteSavedQuery={handleDeleteSavedQuery}
+              onRenameSavedQuery={handleRenameSavedQuery}
+              onReopenSavedQuery={handleReopenSavedQuery}
               t={t}
             />
           </div>
