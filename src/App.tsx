@@ -121,6 +121,14 @@ export default function App() {
     setActiveTable(null);
   };
 
+  const handleDropTable = async (schema: string, table: string) => {
+    await api.dropTable(schema, table);
+    if (activeTable === table) setActiveTable(null);
+    setResults(null);
+    setQueryError(null);
+    await loadSchema(schema);
+  };
+
   const handleInsertRow = async (
     table: string,
     values: Record<string, string | number | null>,
@@ -315,6 +323,7 @@ export default function App() {
           onSchemaChange={handleSchemaChange}
           schemas={schemas}
           activeSchema={activeSchema}
+          onDropTable={handleDropTable}
           t={t}
         />
 
