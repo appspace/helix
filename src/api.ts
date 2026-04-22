@@ -113,4 +113,18 @@ export const api = {
       body: JSON.stringify({ schema, table, values }),
     });
   },
+
+  dropTable(schema: string, table: string) {
+    return request<{ ok: boolean; sql: string }>('/api/drop-table', {
+      method: 'POST',
+      body: JSON.stringify({ schema, table }),
+    });
+  },
+
+  truncateTable(schema: string, table: string) {
+    return request<{ ok: boolean; sql: string }>('/api/truncate-table', {
+      method: 'POST',
+      body: JSON.stringify({ schema, table }),
+    });
+  },
 };

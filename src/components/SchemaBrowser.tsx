@@ -1,4 +1,4 @@
-import { useState, useEffect, CSSProperties } from 'react';
+import { useState, useEffect, useRef, CSSProperties } from 'react';
 import type { Theme } from '../theme';
 import { ShowSchemaDialog } from './ShowSchemaDialog';
 
@@ -30,7 +30,28 @@ interface SchemaBrowserProps {
   onSchemaChange: (name: string) => void;
   schemas: string[];
   activeSchema: string;
+  onDropTable?: (schema: string, table: string) => Promise<void>;
+  onTruncateTable?: (schema: string, table: string) => Promise<void>;
   t: Theme;
+}
+
+function CtxItem({ t, onClick, icon, label, color }: {
+  t: Theme; onClick: () => void; icon: React.ReactNode;
+  label: string; color?: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left', padding: '6px 10px', border: 'none', background: 'transparent', color: color ?? t.textPrimary, cursor: 'pointer', borderRadius: 3, fontSize: 12, fontFamily: 'inherit' }}
+      onMouseEnter={(e) => { e.currentTarget.style.background = t.bgHover; }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+    >
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        {icon}
+      </svg>
+      {label}
+    </button>
+  );
 }
 
 const Chevron = ({ open, color }: { open: boolean; color: string }) => (
@@ -39,12 +60,28 @@ const Chevron = ({ open, color }: { open: boolean; color: string }) => (
   </svg>
 );
 
-export function SchemaBrowser({ schema, activeTable, onTableSelect, onSchemaChange, schemas, activeSchema, t }: SchemaBrowserProps) {
+interface ConfirmDrop {
+  table: string;
+  typedName: string;
+  error: string | null;
+  working: boolean;
+}
+
+interface ConfirmTruncate {
+  table: string;
+  error: string | null;
+  working: boolean;
+}
+
+export function SchemaBrowser({ schema, activeTable, onTableSelect, onSchemaChange, schemas, activeSchema, onDropTable, onTruncateTable, t }: SchemaBrowserProps) {
   const [expanded, setExpanded] = useState({ tables: true, views: false, procedures: false, triggers: false });
   const [expandedTables, setExpandedTables] = useState<Record<string, boolean>>({});
   const [filter, setFilter] = useState('');
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; table: string } | null>(null);
   const [showSchemaFor, setShowSchemaFor] = useState<string | null>(null);
+  const [confirmDrop, setConfirmDrop] = useState<ConfirmDrop | null>(null);
+  const [confirmTruncate, setConfirmTruncate] = useState<ConfirmTruncate | null>(null);
+  const dropInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!contextMenu) return;
@@ -61,6 +98,10 @@ export function SchemaBrowser({ schema, activeTable, onTableSelect, onSchemaChan
       window.removeEventListener('keydown', key);
     };
   }, [contextMenu]);
+
+  useEffect(() => {
+    if (confirmDrop) dropInputRef.current?.focus();
+  }, [confirmDrop?.table]);
 
   const toggle = (key: keyof typeof expanded) => setExpanded(p => ({ ...p, [key]: !p[key] }));
   const toggleTable = (name: string) => setExpandedTables(p => ({ ...p, [name]: !p[name] }));
@@ -170,27 +211,147 @@ export function SchemaBrowser({ schema, activeTable, onTableSelect, onSchemaChan
           onClick={(e) => e.stopPropagation()}
           style={{
             position: 'fixed', top: contextMenu.y, left: contextMenu.x, zIndex: 100,
-            minWidth: 180, background: t.bgElevated, border: `1px solid ${t.border}`,
+            minWidth: 200, background: t.bgElevated, border: `1px solid ${t.border}`,
             borderRadius: 4, boxShadow: t.shadowMd, padding: 4,
             fontFamily: '"IBM Plex Sans", sans-serif', fontSize: 12,
           }}
         >
-          <button
+          <CtxItem
+            t={t}
             onClick={() => { setShowSchemaFor(contextMenu.table); setContextMenu(null); }}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 8,
-              width: '100%', textAlign: 'left', padding: '6px 10px',
-              border: 'none', background: 'transparent', color: t.textPrimary,
-              cursor: 'pointer', borderRadius: 3, fontSize: 12, fontFamily: 'inherit',
-            }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = t.bgHover; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+            icon={<><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></>}
+            label="Show schema"
+          />
+          <div style={{ height: 1, background: t.borderSubtle, margin: '3px 0' }}/>
+          <CtxItem
+            t={t}
+            onClick={() => { setConfirmTruncate({ table: contextMenu.table, error: null, working: false }); setContextMenu(null); }}
+            icon={<><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></>}
+            label="Truncate table"
+            color={t.colorWarning}
+          />
+          <CtxItem
+            t={t}
+            onClick={() => { setConfirmDrop({ table: contextMenu.table, typedName: '', error: null, working: false }); setContextMenu(null); }}
+            icon={<><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M5 6l.7-2.1A2 2 0 0 1 7.6 2h8.8a2 2 0 0 1 1.9 1.9L19 6"/></>}
+            label="Drop table"
+            color={t.colorError}
+          />
+        </div>
+      )}
+
+      {/* Truncate confirm */}
+      {confirmTruncate && (
+        <div
+          onClick={() => { if (!confirmTruncate.working) setConfirmTruncate(null); }}
+          style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ background: t.bgElevated, border: `1px solid ${t.border}`, borderRadius: 6, padding: 20, minWidth: 420, maxWidth: 560, fontFamily: '"IBM Plex Sans", sans-serif', color: t.textPrimary, boxShadow: '0 10px 40px rgba(0,0,0,0.4)' }}
           >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>
-            </svg>
-            Show schema
-          </button>
+            <h3 style={{ margin: '0 0 8px', fontSize: 14, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={t.colorWarning} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+              </svg>
+              Truncate table?
+            </h3>
+            <p style={{ margin: '0 0 6px', fontSize: 12, color: t.textSecondary }}>
+              All rows in <code style={{ fontFamily: 'monospace', color: t.textPrimary }}>`{confirmTruncate.table}`</code> will be deleted. The table structure remains.
+            </p>
+            <pre style={{ margin: '0 0 14px', padding: '7px 10px', background: t.bgBase, border: `1px solid ${t.borderSubtle}`, borderRadius: 4, fontSize: 11, fontFamily: '"JetBrains Mono", monospace', color: t.textPrimary }}>
+              {`TRUNCATE TABLE \`${confirmTruncate.table}\``}
+            </pre>
+            {confirmTruncate.error && (
+              <div style={{ margin: '0 0 12px', padding: '7px 10px', background: t.colorErrorBg, border: `1px solid ${t.colorErrorBorder}`, borderRadius: 4, fontSize: 11, color: t.colorError, fontFamily: 'monospace' }}>
+                {confirmTruncate.error}
+              </div>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button
+                disabled={confirmTruncate.working}
+                onClick={() => setConfirmTruncate(null)}
+                style={{ padding: '6px 14px', fontSize: 12, fontFamily: 'inherit', background: 'transparent', color: t.textSecondary, border: `1px solid ${t.border}`, borderRadius: 4, cursor: confirmTruncate.working ? 'not-allowed' : 'pointer' }}
+              >Cancel</button>
+              <button
+                disabled={confirmTruncate.working}
+                onClick={async () => {
+                  setConfirmTruncate(p => p ? { ...p, working: true, error: null } : p);
+                  try {
+                    await onTruncateTable?.(activeSchema, confirmTruncate.table);
+                    setConfirmTruncate(null);
+                  } catch (err) {
+                    setConfirmTruncate(p => p ? { ...p, working: false, error: err instanceof Error ? err.message : String(err) } : p);
+                  }
+                }}
+                style={{ padding: '6px 14px', fontSize: 12, fontFamily: 'inherit', background: t.colorWarning, color: '#fff', border: 'none', borderRadius: 4, cursor: confirmTruncate.working ? 'wait' : 'pointer', opacity: confirmTruncate.working ? 0.7 : 1 }}
+              >{confirmTruncate.working ? 'Truncating…' : 'Truncate'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Drop confirm */}
+      {confirmDrop && (
+        <div
+          onClick={() => { if (!confirmDrop.working) setConfirmDrop(null); }}
+          style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ background: t.bgElevated, border: `1px solid ${t.colorErrorBorder}`, borderRadius: 6, padding: 20, minWidth: 440, maxWidth: 560, fontFamily: '"IBM Plex Sans", sans-serif', color: t.textPrimary, boxShadow: '0 10px 40px rgba(0,0,0,0.4)' }}
+          >
+            <h3 style={{ margin: '0 0 8px', fontSize: 14, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={t.colorError} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+              </svg>
+              Drop table?
+            </h3>
+            <p style={{ margin: '0 0 6px', fontSize: 12, color: t.textSecondary }}>
+              This will permanently delete <code style={{ fontFamily: 'monospace', color: t.textPrimary }}>`{confirmDrop.table}`</code> and all its data. This cannot be undone.
+            </p>
+            <pre style={{ margin: '0 0 14px', padding: '7px 10px', background: t.bgBase, border: `1px solid ${t.borderSubtle}`, borderRadius: 4, fontSize: 11, fontFamily: '"JetBrains Mono", monospace', color: t.textPrimary }}>
+              {`DROP TABLE \`${confirmDrop.table}\``}
+            </pre>
+            <label style={{ display: 'block', fontSize: 11, color: t.textMuted, marginBottom: 5 }}>
+              Type <strong style={{ color: t.textPrimary, fontFamily: 'monospace' }}>{confirmDrop.table}</strong> to confirm:
+            </label>
+            <input
+              ref={dropInputRef}
+              value={confirmDrop.typedName}
+              onChange={(e) => setConfirmDrop(p => p ? { ...p, typedName: e.target.value, error: null } : p)}
+              onKeyDown={(e) => { if (e.key === 'Escape') setConfirmDrop(null); }}
+              disabled={confirmDrop.working}
+              placeholder={confirmDrop.table}
+              style={{ width: '100%', boxSizing: 'border-box', padding: '6px 8px', marginBottom: 12, background: t.bgBase, color: t.textPrimary, border: `1px solid ${confirmDrop.error ? t.colorError : t.border}`, borderRadius: 3, outline: 'none', fontSize: 12, fontFamily: 'monospace' }}
+            />
+            {confirmDrop.error && (
+              <div style={{ margin: '-6px 0 12px', padding: '7px 10px', background: t.colorErrorBg, border: `1px solid ${t.colorErrorBorder}`, borderRadius: 4, fontSize: 11, color: t.colorError, fontFamily: 'monospace' }}>
+                {confirmDrop.error}
+              </div>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button
+                disabled={confirmDrop.working}
+                onClick={() => setConfirmDrop(null)}
+                style={{ padding: '6px 14px', fontSize: 12, fontFamily: 'inherit', background: 'transparent', color: t.textSecondary, border: `1px solid ${t.border}`, borderRadius: 4, cursor: confirmDrop.working ? 'not-allowed' : 'pointer' }}
+              >Cancel</button>
+              <button
+                disabled={confirmDrop.typedName !== confirmDrop.table || confirmDrop.working}
+                onClick={async () => {
+                  if (confirmDrop.typedName !== confirmDrop.table) return;
+                  setConfirmDrop(p => p ? { ...p, working: true, error: null } : p);
+                  try {
+                    await onDropTable?.(activeSchema, confirmDrop.table);
+                    setConfirmDrop(null);
+                  } catch (err) {
+                    setConfirmDrop(p => p ? { ...p, working: false, error: err instanceof Error ? err.message : String(err) } : p);
+                  }
+                }}
+                style={{ padding: '6px 14px', fontSize: 12, fontFamily: 'inherit', background: t.colorError, color: '#fff', border: 'none', borderRadius: 4, opacity: (confirmDrop.typedName !== confirmDrop.table || confirmDrop.working) ? 0.4 : 1, cursor: (confirmDrop.typedName !== confirmDrop.table || confirmDrop.working) ? 'not-allowed' : 'pointer' }}
+              >{confirmDrop.working ? 'Dropping…' : 'Drop Table'}</button>
+            </div>
+          </div>
         </div>
       )}
 
