@@ -8,6 +8,7 @@ import { ResultsTable, type QueryResults } from './components/ResultsTable';
 import { ConnectionManager, type ConnectionForm } from './components/ConnectionManager';
 import { api } from './api';
 import type { SchemaData } from './api';
+import { saveConnection } from './savedConnections';
 
 interface Tab {
   id: string;
@@ -77,6 +78,18 @@ export default function App() {
       setSchemas(list);
       setActiveSchema(initial);
       setConnected(true);
+
+      // Persist non-secret fields so the user doesn't retype them next time.
+      if (friendly) {
+        saveConnection({
+          name: friendly,
+          host: form.host,
+          port: form.port,
+          user: form.user,
+          database: form.database,
+          ssl: form.ssl,
+        });
+      }
     } catch (err) {
       setConnectionError(err instanceof Error ? err.message : String(err));
       try { await api.disconnect(); } catch { /* ignore */ }
