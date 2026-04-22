@@ -314,6 +314,7 @@ export default function App() {
             isRunning={isRunning}
             error={queryError}
             executionTime={execTime}
+            activeSchema={activeSchema}
             schemaData={schemaData}
             onDeleteRow={handleDeleteRow}
             onUpdateCell={handleUpdateCell}
