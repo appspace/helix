@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, CSSProperties, MutableRefObject } from 'react';
 import type { Theme } from '../theme';
 import type { ColumnMeta, SchemaData } from '../api';
+import { InsertRowDialog } from './InsertRowDialog';
 
 export interface QueryResults {
   columns: string[];
@@ -59,6 +60,7 @@ interface ResultsTableProps {
   schemaData?: SchemaData;
   onDeleteRow?: (row: Row, target: DeleteTarget) => Promise<void> | void;
   onUpdateCell?: (row: Row, target: UpdateCellTarget) => Promise<void> | void;
+  onInsertRow?: (table: string, values: Record<string, CellValue>) => Promise<void> | void;
   t: Theme;
 }
 
@@ -110,7 +112,7 @@ function resolveDeleteTarget(row: Row, columnMeta: ColumnMeta[] | undefined): De
   };
 }
 
-export function ResultsTable({ results, isRunning, error, executionTime, schemaData, onDeleteRow, onUpdateCell, t }: ResultsTableProps) {
+export function ResultsTable({ results, isRunning, error, executionTime, schemaData, onDeleteRow, onUpdateCell, onInsertRow, t }: ResultsTableProps) {
   const [sortCol, setSortCol] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [selectedRow, setSelectedRow] = useState<number | null>(null);
@@ -121,6 +123,7 @@ export function ResultsTable({ results, isRunning, error, executionTime, schemaD
 
   const [editing, setEditing] = useState<{ row: Row; col: string; draft: string; kind: EditKind; saving: boolean; error: string | null } | null>(null);
   const [confirmUpdate, setConfirmUpdate] = useState<{ row: Row; target: UpdateCellTarget; error: string | null; saving: boolean } | null>(null);
+  const [insertOpen, setInsertOpen] = useState(false);
   const editInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -212,6 +215,17 @@ export function ResultsTable({ results, isRunning, error, executionTime, schemaD
 
   const formatExecTime = (ms: number) => ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(2)}s`;
 
+  // Determine if the current result set maps to a single source table so we can offer "New row"
+  const insertTarget = (() => {
+    if (!results?.columnMeta || results.columnMeta.length === 0) return null;
+    const orgTables = new Set(results.columnMeta.map(c => c.orgTable).filter(Boolean));
+    if (orgTables.size !== 1) return null;
+    const table = [...orgTables][0];
+    const def = schemaData?.tables.find(x => x.name === table);
+    if (!def) return null;
+    return { table, columns: def.columns };
+  })();
+
   return (
     <div style={s.root}>
       <div style={s.tabBar}>
@@ -228,6 +242,18 @@ export function ResultsTable({ results, isRunning, error, executionTime, schemaD
           Output
         </div>
         <div style={{ flex: 1 }}/>
+        {onInsertRow && insertTarget && (
+          <button
+            style={s.exportBtn}
+            onClick={() => setInsertOpen(true)}
+            title={`Insert a new row into ${insertTarget.table}`}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+            New row
+          </button>
+        )}
         <button style={s.exportBtn}>
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
@@ -548,6 +574,19 @@ export function ResultsTable({ results, isRunning, error, executionTime, schemaD
             </div>
           </div>
         </div>
+      )}
+
+      {insertOpen && insertTarget && onInsertRow && (
+        <InsertRowDialog
+          table={insertTarget.table}
+          columns={insertTarget.columns}
+          onClose={() => setInsertOpen(false)}
+          onSubmit={async (values) => {
+            await onInsertRow(insertTarget.table, values);
+            setInsertOpen(false);
+          }}
+          t={t}
+        />
       )}
     </div>
   );

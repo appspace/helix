@@ -5,6 +5,7 @@ import { getSchemas, getSchema } from './routes/schema.js';
 import { postQuery } from './routes/query.js';
 import { postDeleteRow } from './routes/deleteRow.js';
 import { postUpdateCell } from './routes/updateCell.js';
+import { postInsertRow } from './routes/insertRow.js';
 
 const app = express();
 const PORT = process.env['PORT'] ?? 3001;
@@ -26,6 +27,7 @@ app.get('/api/schema', getSchema);
 app.post('/api/query', postQuery);
 app.post('/api/delete-row', postDeleteRow);
 app.post('/api/update-cell', postUpdateCell);
+app.post('/api/insert-row', postInsertRow);
 
 app.listen(PORT, () => {
   console.log(`Helix server running at http://localhost:${PORT}`);

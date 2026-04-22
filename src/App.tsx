@@ -100,6 +100,24 @@ export default function App() {
     setActiveTable(null);
   };
 
+  const handleInsertRow = async (
+    table: string,
+    values: Record<string, string | number | null>,
+  ) => {
+    await api.insertRow(activeSchema, table, values);
+    // Re-run the current query so the grid reflects the new row (if it matches WHERE/ORDER/LIMIT).
+    const sql = currentTab?.query?.trim();
+    if (sql) {
+      try {
+        const res = await api.query(sql, activeSchema);
+        setResults({ columns: res.columns, columnMeta: res.columnMeta, rows: res.rows });
+        setExecTime(res.executionTime);
+      } catch { /* leave prior results visible */ }
+    }
+    // Refresh schema row counts in the sidebar.
+    if (activeSchema) loadSchema(activeSchema);
+  };
+
   const handleUpdateCell = async (
     row: Record<string, string | number | null>,
     target: { table: string; where: { column: string; value: string | number | null }[]; column: string; value: string | number | null },
@@ -247,6 +265,7 @@ export default function App() {
             schemaData={schemaData}
             onDeleteRow={handleDeleteRow}
             onUpdateCell={handleUpdateCell}
+            onInsertRow={handleInsertRow}
             t={t}
           />
         </div>

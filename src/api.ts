@@ -1,12 +1,25 @@
 import type { QueryResults } from './components/ResultsTable';
 
+export interface SchemaColumn {
+  name: string;
+  type: string;
+  dataType: string;
+  pk: boolean;
+  nullable: boolean;
+  default: string | null;
+  autoIncrement: boolean;
+  comment: string;
+}
+
+export interface SchemaTable {
+  name: string;
+  rows: number;
+  comment: string;
+  columns: SchemaColumn[];
+}
+
 export interface SchemaData {
-  tables: {
-    name: string;
-    rows: number;
-    comment: string;
-    columns: { name: string; type: string; pk: boolean; comment: string }[];
-  }[];
+  tables: SchemaTable[];
   views: string[];
   procedures: string[];
   triggers: string[];
@@ -80,6 +93,13 @@ export const api = {
     return request<{ affectedRows: number; changedRows: number; sql: string }>('/api/update-cell', {
       method: 'POST',
       body: JSON.stringify({ schema, table, where, column, value }),
+    });
+  },
+
+  insertRow(schema: string, table: string, values: Record<string, string | number | null>) {
+    return request<{ affectedRows: number; insertId: number | null; sql: string }>('/api/insert-row', {
+      method: 'POST',
+      body: JSON.stringify({ schema, table, values }),
     });
   },
 };
