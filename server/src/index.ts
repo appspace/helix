@@ -6,6 +6,7 @@ import { postQuery } from './routes/query.js';
 import { postDeleteRow } from './routes/deleteRow.js';
 import { postUpdateCell } from './routes/updateCell.js';
 import { postInsertRow } from './routes/insertRow.js';
+import { getTableDdl } from './routes/tableDdl.js';
 
 const app = express();
 const PORT = process.env['PORT'] ?? 3001;
@@ -23,6 +24,7 @@ app.get('/api/connect/status', getStatus);
 // Schema
 app.get('/api/schemas', getSchemas);
 app.get('/api/schema', getSchema);
+app.get('/api/table-ddl', getTableDdl);
 
 // Query
 app.post('/api/query', postQuery);

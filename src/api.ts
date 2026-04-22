@@ -82,6 +82,10 @@ export const api = {
     return request<SchemaData>(`/api/schema?schema=${encodeURIComponent(schema)}`);
   },
 
+  tableDdl(schema: string, table: string) {
+    return request<{ ddl: string }>(`/api/table-ddl?schema=${encodeURIComponent(schema)}&table=${encodeURIComponent(table)}`);
+  },
+
   query(sql: string, schema: string) {
     return request<QueryResults & { columnMeta?: ColumnMeta[]; executionTime: number; affectedRows?: number; insertId?: number }>(
       '/api/query',

@@ -1,5 +1,6 @@
-import { useState, CSSProperties } from 'react';
+import { useState, useEffect, CSSProperties } from 'react';
 import type { Theme } from '../theme';
+import { ShowSchemaDialog } from './ShowSchemaDialog';
 
 interface Column {
   name: string;
@@ -42,6 +43,24 @@ export function SchemaBrowser({ schema, activeTable, onTableSelect, onSchemaChan
   const [expanded, setExpanded] = useState({ tables: true, views: false, procedures: false, triggers: false });
   const [expandedTables, setExpandedTables] = useState<Record<string, boolean>>({});
   const [filter, setFilter] = useState('');
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; table: string } | null>(null);
+  const [showSchemaFor, setShowSchemaFor] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = () => setContextMenu(null);
+    const key = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+    window.addEventListener('click', close);
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    window.addEventListener('keydown', key);
+    return () => {
+      window.removeEventListener('click', close);
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('resize', close);
+      window.removeEventListener('keydown', key);
+    };
+  }, [contextMenu]);
 
   const toggle = (key: keyof typeof expanded) => setExpanded(p => ({ ...p, [key]: !p[key] }));
   const toggleTable = (name: string) => setExpandedTables(p => ({ ...p, [name]: !p[name] }));
@@ -108,6 +127,10 @@ export function SchemaBrowser({ schema, activeTable, onTableSelect, onSchemaChan
                 <div
                   style={{ ...s.tableRow, ...(activeTable === table.name ? s.tableRowActive : {}) }}
                   onClick={() => { onTableSelect(table.name); toggleTable(table.name); }}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setContextMenu({ x: e.clientX, y: e.clientY, table: table.name });
+                  }}
                   title={table.comment || undefined}
                 >
                   <Chevron open={!!expandedTables[table.name]} color={t.textMuted}/>
@@ -141,6 +164,44 @@ export function SchemaBrowser({ schema, activeTable, onTableSelect, onSchemaChan
           </div>
         ))}
       </div>
+
+      {contextMenu && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: 'fixed', top: contextMenu.y, left: contextMenu.x, zIndex: 100,
+            minWidth: 180, background: t.bgElevated, border: `1px solid ${t.border}`,
+            borderRadius: 4, boxShadow: t.shadowMd, padding: 4,
+            fontFamily: '"IBM Plex Sans", sans-serif', fontSize: 12,
+          }}
+        >
+          <button
+            onClick={() => { setShowSchemaFor(contextMenu.table); setContextMenu(null); }}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              width: '100%', textAlign: 'left', padding: '6px 10px',
+              border: 'none', background: 'transparent', color: t.textPrimary,
+              cursor: 'pointer', borderRadius: 3, fontSize: 12, fontFamily: 'inherit',
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = t.bgHover; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>
+            </svg>
+            Show schema
+          </button>
+        </div>
+      )}
+
+      {showSchemaFor && (
+        <ShowSchemaDialog
+          schema={activeSchema}
+          table={showSchemaFor}
+          onClose={() => setShowSchemaFor(null)}
+          t={t}
+        />
+      )}
     </div>
   );
 }
