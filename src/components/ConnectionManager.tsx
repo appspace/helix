@@ -1,5 +1,6 @@
 import { useState, CSSProperties } from 'react';
 import type { Theme } from '../theme';
+import { api } from '../api';
 import { listSavedConnections, deleteSavedConnection, type SavedConnection } from '../savedConnections';
 
 export interface ConnectionForm {
@@ -35,9 +36,26 @@ export function ConnectionManager({ onConnect, isConnecting, error, t }: Connect
   const [appliedSaved, setAppliedSaved] = useState<string>(saved[0]?.name ?? '');
   const [suggestOpen, setSuggestOpen] = useState(false);
   const [highlightIdx, setHighlightIdx] = useState(-1);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: true } | { ok: false; error: string } | null>(null);
 
-  const set = <K extends keyof ConnectionForm>(k: K, v: ConnectionForm[K]) =>
+  const runTest = async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      await api.testConnection(form);
+      setTestResult({ ok: true });
+    } catch (err) {
+      setTestResult({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const set = <K extends keyof ConnectionForm>(k: K, v: ConnectionForm[K]) => {
     setForm(p => ({ ...p, [k]: v }));
+    setTestResult(null);
+  };
 
   const applySaved = (entry: SavedConnection) => {
     setForm({ ...entry, password: '' });
@@ -274,10 +292,32 @@ export function ConnectionManager({ onConnect, isConnecting, error, t }: Connect
                 <span>{error}</span>
               </div>
             )}
+
+            {testResult && testResult.ok && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', background: t.colorSuccessBg, border: `1px solid ${t.colorSuccess}55`, borderRadius: 6, fontSize: 12, color: t.colorSuccess }}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={t.colorSuccess} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="20 6 9 17 4 12"/>
+                </svg>
+                <span>Connection successful — {form.user}@{form.host}:{form.port || 3306}</span>
+              </div>
+            )}
+            {testResult && !testResult.ok && (
+              <div style={s.errorBanner}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={t.colorError} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+                </svg>
+                <span>{testResult.error}</span>
+              </div>
+            )}
           </div>
 
           <div style={s.footer}>
-            <button type="button" style={s.testBtn}>Test connection</button>
+            <button
+              type="button"
+              style={{ ...s.testBtn, opacity: testing ? 0.7 : 1, cursor: testing ? 'wait' : 'pointer' }}
+              onClick={runTest}
+              disabled={testing || isConnecting}
+            >{testing ? 'Testing…' : 'Test connection'}</button>
             <div style={{ flex: 1 }}/>
             <button
               type="submit"

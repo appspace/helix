@@ -58,3 +58,20 @@ export function getActiveConfig(): ConnectionConfig | null {
 export function isConnected(): boolean {
   return pool !== null;
 }
+
+export async function testConnection(config: ConnectionConfig): Promise<void> {
+  const conn = await mysql.createConnection({
+    host: config.host,
+    port: config.port,
+    user: config.user,
+    password: config.password,
+    database: config.database || undefined,
+    ssl: config.ssl ? { rejectUnauthorized: false } : undefined,
+    connectTimeout: 10_000,
+  });
+  try {
+    await conn.ping();
+  } finally {
+    await conn.end();
+  }
+}

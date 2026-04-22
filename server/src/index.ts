@@ -1,6 +1,6 @@
 import express from 'express';
 import cors from 'cors';
-import { postConnect, deleteConnect, getStatus } from './routes/connect.js';
+import { postConnect, deleteConnect, getStatus, postTestConnect } from './routes/connect.js';
 import { getSchemas, getSchema } from './routes/schema.js';
 import { postQuery } from './routes/query.js';
 import { postDeleteRow } from './routes/deleteRow.js';
@@ -16,6 +16,7 @@ app.use(express.json());
 
 // Connection
 app.post('/api/connect', postConnect);
+app.post('/api/connect/test', postTestConnect);
 app.delete('/api/connect', deleteConnect);
 app.get('/api/connect/status', getStatus);
 

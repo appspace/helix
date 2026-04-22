@@ -1,5 +1,5 @@
 import type { RequestHandler } from 'express';
-import { connect, disconnect, isConnected, getActiveConfig } from '../db.js';
+import { connect, disconnect, isConnected, getActiveConfig, testConnection } from '../db.js';
 
 interface MySQLError {
   message?: string;
@@ -69,6 +69,30 @@ export const postConnect: RequestHandler = async (req, res) => {
 export const deleteConnect: RequestHandler = async (_req, res) => {
   await disconnect();
   res.json({ ok: true });
+};
+
+export const postTestConnect: RequestHandler = async (req, res) => {
+  const { host, port, user, password, database, ssl } = req.body as {
+    host: string;
+    port: number;
+    user: string;
+    password: string;
+    database?: string;
+    ssl?: boolean;
+  };
+
+  if (!host || !user) {
+    res.status(400).json({ error: 'host and user are required.' });
+    return;
+  }
+
+  try {
+    const effectivePort = Number(port) || 3306;
+    await testConnection({ host, port: effectivePort, user, password, database, ssl });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({ error: friendlyConnectError(err, host, Number(port) || 3306) });
+  }
 };
 
 export const getStatus: RequestHandler = (_req, res) => {

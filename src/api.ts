@@ -59,6 +59,13 @@ export const api = {
     });
   },
 
+  testConnection(form: { host: string; port: string; user: string; password: string; database: string; ssl: boolean }) {
+    return request<{ ok: boolean }>('/api/connect/test', {
+      method: 'POST',
+      body: JSON.stringify({ ...form, port: Number(form.port) }),
+    });
+  },
+
   disconnect() {
     return request<{ ok: boolean }>('/api/connect', { method: 'DELETE' });
   },
