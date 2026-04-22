@@ -127,6 +127,9 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
   const [confirmUpdate, setConfirmUpdate] = useState<{ row: Row; target: UpdateCellTarget; error: string | null; saving: boolean } | null>(null);
   const [insertOpen, setInsertOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [filterText, setFilterText] = useState('');
+  const filterInputRef = useRef<HTMLInputElement | null>(null);
 
   // Column layout: order and widths
   const [colOrder, setColOrder] = useState<string[]>([]);
@@ -176,6 +179,22 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
       window.removeEventListener('keydown', key);
     };
   }, [contextMenu]);
+
+  // Ctrl+F opens the filter bar
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+        e.preventDefault();
+        setFilterOpen(true);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  useEffect(() => {
+    if (filterOpen) { filterInputRef.current?.focus(); filterInputRef.current?.select(); }
+  }, [filterOpen]);
 
   // Persist layout only when the result comes from a single identifiable table
   const persistKey = (() => {
@@ -299,6 +318,14 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
     return sortDir === 'asc' ? cmp : -cmp;
   });
 
+  const needle = filterText.toLowerCase();
+  const filtered = needle
+    ? sorted.filter(row => displayCols.some(col => {
+        const v = row[col];
+        return v !== null && String(v).toLowerCase().includes(needle);
+      }))
+    : sorted;
+
   const formatExecTime = (ms: number) => ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(2)}s`;
 
   const exportBaseName = (() => {
@@ -344,6 +371,16 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
           Output
         </div>
         <div style={{ flex: 1 }}/>
+        <button
+          style={{ ...s.exportBtn, background: filterOpen ? t.bgHover : t.bgElevated }}
+          onClick={() => { if (filterOpen) { setFilterOpen(false); setFilterText(''); } else setFilterOpen(true); }}
+          title="Filter rows (Ctrl+F)"
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+          Filter
+        </button>
         {onInsertRow && insertTarget && (
           <button
             style={s.exportBtn}
@@ -387,6 +424,48 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
           )}
         </div>
       </div>
+
+      {filterOpen && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8, padding: '4px 10px',
+          background: t.bgSurface, borderBottom: `1px solid ${t.border}`, flexShrink: 0,
+        }}>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={t.textMuted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+          <input
+            ref={filterInputRef}
+            type="text"
+            placeholder="Filter rows…"
+            value={filterText}
+            onChange={(e) => setFilterText(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Escape') { setFilterOpen(false); setFilterText(''); } }}
+            style={{
+              flex: 1, maxWidth: 280, padding: '3px 8px', fontSize: 12,
+              background: t.bgBase, color: t.textPrimary,
+              border: `1px solid ${t.border}`, borderRadius: 3, outline: 'none',
+              fontFamily: '"IBM Plex Sans", sans-serif',
+            }}
+          />
+          {needle && (
+            <span style={{ ...s.stat, color: filtered.length === 0 ? t.colorError : t.textMuted }}>
+              {filtered.length} of {rows.length}
+            </span>
+          )}
+          <button
+            onClick={() => { setFilterOpen(false); setFilterText(''); }}
+            title="Close filter (Esc)"
+            style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              width: 20, height: 20, padding: 0, border: 'none',
+              background: 'transparent', color: t.textMuted, cursor: 'pointer',
+              borderRadius: 3, fontSize: 14, lineHeight: 1,
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = t.bgHover; e.currentTarget.style.color = t.textPrimary; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = t.textMuted; }}
+          >×</button>
+        </div>
+      )}
 
       <div style={s.tableWrap}>
         <table style={s.table}>
@@ -483,7 +562,7 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
             </tr>
           </thead>
           <tbody>
-            {sorted.map((row, i) => (
+            {filtered.map((row, i) => (
               <tr
                 key={i}
                 style={{ ...s.tr, background: selectedRow === i ? t.bgSelected : i % 2 === 0 ? 'transparent' : t.bgHover }}
@@ -576,7 +655,12 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
       </div>
 
       <div style={s.statusBar}>
-        <span style={s.stat}><strong style={{ color: t.textSecondary }}>{rows.length.toLocaleString()}</strong> rows returned</span>
+        <span style={s.stat}>
+          {needle
+            ? <><strong style={{ color: t.textSecondary }}>{filtered.length.toLocaleString()}</strong> of <strong style={{ color: t.textSecondary }}>{rows.length.toLocaleString()}</strong> rows</>
+            : <><strong style={{ color: t.textSecondary }}>{rows.length.toLocaleString()}</strong> rows returned</>
+          }
+        </span>
         <span style={s.statDiv}/>
         <span style={s.stat}><strong style={{ color: t.textSecondary }}>{executionTime !== null ? formatExecTime(executionTime) : '—'}</strong></span>
         <span style={s.statDiv}/>
