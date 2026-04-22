@@ -121,10 +121,4 @@ export const api = {
     });
   },
 
-  truncateTable(schema: string, table: string) {
-    return request<{ ok: boolean; sql: string }>('/api/truncate-table', {
-      method: 'POST',
-      body: JSON.stringify({ schema, table }),
-    });
-  },
 };

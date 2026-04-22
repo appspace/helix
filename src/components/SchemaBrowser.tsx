@@ -31,7 +31,6 @@ interface SchemaBrowserProps {
   schemas: string[];
   activeSchema: string;
   onDropTable?: (schema: string, table: string) => Promise<void>;
-  onTruncateTable?: (schema: string, table: string) => Promise<void>;
   t: Theme;
 }
 
@@ -67,20 +66,13 @@ interface ConfirmDrop {
   working: boolean;
 }
 
-interface ConfirmTruncate {
-  table: string;
-  error: string | null;
-  working: boolean;
-}
-
-export function SchemaBrowser({ schema, activeTable, onTableSelect, onSchemaChange, schemas, activeSchema, onDropTable, onTruncateTable, t }: SchemaBrowserProps) {
+export function SchemaBrowser({ schema, activeTable, onTableSelect, onSchemaChange, schemas, activeSchema, onDropTable, t }: SchemaBrowserProps) {
   const [expanded, setExpanded] = useState({ tables: true, views: false, procedures: false, triggers: false });
   const [expandedTables, setExpandedTables] = useState<Record<string, boolean>>({});
   const [filter, setFilter] = useState('');
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; table: string } | null>(null);
   const [showSchemaFor, setShowSchemaFor] = useState<string | null>(null);
   const [confirmDrop, setConfirmDrop] = useState<ConfirmDrop | null>(null);
-  const [confirmTruncate, setConfirmTruncate] = useState<ConfirmTruncate | null>(null);
   const dropInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -225,69 +217,11 @@ export function SchemaBrowser({ schema, activeTable, onTableSelect, onSchemaChan
           <div style={{ height: 1, background: t.borderSubtle, margin: '3px 0' }}/>
           <CtxItem
             t={t}
-            onClick={() => { setConfirmTruncate({ table: contextMenu.table, error: null, working: false }); setContextMenu(null); }}
-            icon={<><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></>}
-            label="Truncate table"
-            color={t.colorWarning}
-          />
-          <CtxItem
-            t={t}
             onClick={() => { setConfirmDrop({ table: contextMenu.table, typedName: '', error: null, working: false }); setContextMenu(null); }}
             icon={<><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M5 6l.7-2.1A2 2 0 0 1 7.6 2h8.8a2 2 0 0 1 1.9 1.9L19 6"/></>}
             label="Drop table"
             color={t.colorError}
           />
-        </div>
-      )}
-
-      {/* Truncate confirm */}
-      {confirmTruncate && (
-        <div
-          onClick={() => { if (!confirmTruncate.working) setConfirmTruncate(null); }}
-          style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{ background: t.bgElevated, border: `1px solid ${t.border}`, borderRadius: 6, padding: 20, minWidth: 420, maxWidth: 560, fontFamily: '"IBM Plex Sans", sans-serif', color: t.textPrimary, boxShadow: '0 10px 40px rgba(0,0,0,0.4)' }}
-          >
-            <h3 style={{ margin: '0 0 8px', fontSize: 14, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={t.colorWarning} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
-              </svg>
-              Truncate table?
-            </h3>
-            <p style={{ margin: '0 0 6px', fontSize: 12, color: t.textSecondary }}>
-              All rows in <code style={{ fontFamily: 'monospace', color: t.textPrimary }}>`{confirmTruncate.table}`</code> will be deleted. The table structure remains.
-            </p>
-            <pre style={{ margin: '0 0 14px', padding: '7px 10px', background: t.bgBase, border: `1px solid ${t.borderSubtle}`, borderRadius: 4, fontSize: 11, fontFamily: '"JetBrains Mono", monospace', color: t.textPrimary }}>
-              {`TRUNCATE TABLE \`${confirmTruncate.table}\``}
-            </pre>
-            {confirmTruncate.error && (
-              <div style={{ margin: '0 0 12px', padding: '7px 10px', background: t.colorErrorBg, border: `1px solid ${t.colorErrorBorder}`, borderRadius: 4, fontSize: 11, color: t.colorError, fontFamily: 'monospace' }}>
-                {confirmTruncate.error}
-              </div>
-            )}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-              <button
-                disabled={confirmTruncate.working}
-                onClick={() => setConfirmTruncate(null)}
-                style={{ padding: '6px 14px', fontSize: 12, fontFamily: 'inherit', background: 'transparent', color: t.textSecondary, border: `1px solid ${t.border}`, borderRadius: 4, cursor: confirmTruncate.working ? 'not-allowed' : 'pointer' }}
-              >Cancel</button>
-              <button
-                disabled={confirmTruncate.working}
-                onClick={async () => {
-                  setConfirmTruncate(p => p ? { ...p, working: true, error: null } : p);
-                  try {
-                    await onTruncateTable?.(activeSchema, confirmTruncate.table);
-                    setConfirmTruncate(null);
-                  } catch (err) {
-                    setConfirmTruncate(p => p ? { ...p, working: false, error: err instanceof Error ? err.message : String(err) } : p);
-                  }
-                }}
-                style={{ padding: '6px 14px', fontSize: 12, fontFamily: 'inherit', background: t.colorWarning, color: '#fff', border: 'none', borderRadius: 4, cursor: confirmTruncate.working ? 'wait' : 'pointer', opacity: confirmTruncate.working ? 0.7 : 1 }}
-              >{confirmTruncate.working ? 'Truncating…' : 'Truncate'}</button>
-            </div>
-          </div>
         </div>
       )}
 

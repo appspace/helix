@@ -8,7 +8,6 @@ import { postUpdateCell } from './routes/updateCell.js';
 import { postInsertRow } from './routes/insertRow.js';
 import { getTableDdl } from './routes/tableDdl.js';
 import { postDropTable } from './routes/dropTable.js';
-import { postTruncateTable } from './routes/truncateTable.js';
 
 const app = express();
 const PORT = process.env['PORT'] ?? 3001;
@@ -34,7 +33,6 @@ app.post('/api/delete-row', postDeleteRow);
 app.post('/api/update-cell', postUpdateCell);
 app.post('/api/insert-row', postInsertRow);
 app.post('/api/drop-table', postDropTable);
-app.post('/api/truncate-table', postTruncateTable);
 
 app.listen(PORT, () => {
   console.log(`Helix server running at http://localhost:${PORT}`);

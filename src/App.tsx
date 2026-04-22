@@ -125,11 +125,6 @@ export default function App() {
     await loadSchema(schema);
   };
 
-  const handleTruncateTable = async (schema: string, table: string) => {
-    await api.truncateTable(schema, table);
-    await loadSchema(schema);
-  };
-
   const handleInsertRow = async (
     table: string,
     values: Record<string, string | number | null>,
@@ -305,7 +300,6 @@ export default function App() {
           schemas={schemas}
           activeSchema={activeSchema}
           onDropTable={handleDropTable}
-          onTruncateTable={handleTruncateTable}
           t={t}
         />
 
