@@ -1,4 +1,4 @@
-import { useState, useEffect, CSSProperties } from 'react';
+import { useState, CSSProperties } from 'react';
 import type { Theme } from '../theme';
 import { listSavedConnections, deleteSavedConnection, type SavedConnection } from '../savedConnections';
 
@@ -31,29 +31,40 @@ export function ConnectionManager({ onConnect, isConnecting, error, t }: Connect
         password: '', database: '', ssl: false,
       };
   const [form, setForm] = useState<ConnectionForm>(initialForm);
-  const [selectedSaved, setSelectedSaved] = useState<string>(saved[0]?.name ?? '');
+  // Track the saved entry currently reflected in the form, so we only auto-populate once per match.
+  const [appliedSaved, setAppliedSaved] = useState<string>(saved[0]?.name ?? '');
+  const [suggestOpen, setSuggestOpen] = useState(false);
+  const [highlightIdx, setHighlightIdx] = useState(-1);
 
   const set = <K extends keyof ConnectionForm>(k: K, v: ConnectionForm[K]) =>
     setForm(p => ({ ...p, [k]: v }));
 
-  const loadSaved = (name: string) => {
-    const entry = saved.find(s => s.name === name);
-    if (!entry) return;
+  const applySaved = (entry: SavedConnection) => {
     setForm({ ...entry, password: '' });
-    setSelectedSaved(name);
+    setAppliedSaved(entry.name);
+    setSuggestOpen(false);
+  };
+
+  const onNameChange = (value: string) => {
+    setForm(p => ({ ...p, name: value }));
+    if (appliedSaved && appliedSaved !== value) setAppliedSaved('');
+    setHighlightIdx(-1);
   };
 
   const removeSaved = (name: string) => {
     deleteSavedConnection(name);
     const next = listSavedConnections();
     setSaved(next);
-    if (selectedSaved === name) setSelectedSaved(next[0]?.name ?? '');
+    if (appliedSaved === name) setAppliedSaved('');
   };
 
-  useEffect(() => {
-    // If the user types a new name, de-select the saved entry visually
-    if (selectedSaved && form.name.trim() !== selectedSaved) setSelectedSaved('');
-  }, [form.name, selectedSaved]);
+  const filteredSaved = (() => {
+    const q = form.name.trim().toLowerCase();
+    if (!q) return saved;
+    const starts = saved.filter(c => c.name.toLowerCase().startsWith(q));
+    const includes = saved.filter(c => !c.name.toLowerCase().startsWith(q) && c.name.toLowerCase().includes(q));
+    return [...starts, ...includes];
+  })();
 
   const s = {
     overlay: { position: 'fixed', inset: 0, background: t.bgBase + 'EE', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 300 } as CSSProperties,
@@ -97,42 +108,84 @@ export function ConnectionManager({ onConnect, isConnecting, error, t }: Connect
           autoComplete="on"
         >
           <div style={s.body}>
-            {saved.length > 0 && (
-              <div style={{ ...s.field }}>
-                <label style={s.label}>Saved connections</label>
-                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                  <select
-                    value={selectedSaved}
-                    onChange={(e) => loadSaved(e.target.value)}
-                    style={{ ...s.input, flex: 1, cursor: 'pointer' }}
-                  >
-                    <option value="">— pick a saved connection —</option>
-                    {saved.map(c => (
-                      <option key={c.name} value={c.name}>{c.name} ({c.user}@{c.host}:{c.port})</option>
-                    ))}
-                  </select>
-                  {selectedSaved && (
-                    <button
-                      type="button"
-                      onClick={() => removeSaved(selectedSaved)}
-                      title={`Forget '${selectedSaved}'`}
-                      style={{ height: 32, padding: '0 10px', background: 'transparent', border: `1px solid ${t.border}`, borderRadius: 5, color: t.textMuted, cursor: 'pointer', fontSize: 12, fontFamily: 'inherit' }}
-                    >Forget</button>
+            <div style={s.field}>
+              <label style={s.label}>
+                Connection name
+                {saved.length > 0 && (
+                  <span style={{ color: t.textMuted, textTransform: 'none', letterSpacing: 0, fontWeight: 400, marginLeft: 6 }}>
+                    — start typing to see saved connections
+                  </span>
+                )}
+              </label>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <div style={{ position: 'relative', flex: 1 }}>
+                  <input
+                    style={s.input}
+                    name="connection-name"
+                    autoComplete="off"
+                    value={form.name}
+                    onChange={e => onNameChange(e.target.value)}
+                    onFocus={() => { if (saved.length > 0) { setSuggestOpen(true); setHighlightIdx(-1); } }}
+                    onBlur={() => setTimeout(() => setSuggestOpen(false), 120)}
+                    onKeyDown={(e) => {
+                      if (!suggestOpen || filteredSaved.length === 0) return;
+                      if (e.key === 'ArrowDown') { e.preventDefault(); setHighlightIdx(i => Math.min(i + 1, filteredSaved.length - 1)); }
+                      else if (e.key === 'ArrowUp') { e.preventDefault(); setHighlightIdx(i => Math.max(i - 1, 0)); }
+                      else if (e.key === 'Enter' && highlightIdx >= 0) { e.preventDefault(); applySaved(filteredSaved[highlightIdx]); }
+                      else if (e.key === 'Escape') { e.preventDefault(); setSuggestOpen(false); }
+                    }}
+                    placeholder="My Database"
+                  />
+                  {suggestOpen && filteredSaved.length > 0 && (
+                    <div
+                      role="listbox"
+                      style={{
+                        position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0, zIndex: 10,
+                        background: t.bgElevated, border: `1px solid ${t.border}`, borderRadius: 6,
+                        boxShadow: t.shadowLg, maxHeight: 240, overflowY: 'auto', padding: 4,
+                      }}
+                    >
+                      {filteredSaved.map((c, i) => {
+                        const highlighted = i === highlightIdx;
+                        return (
+                          <div
+                            key={c.name}
+                            role="option"
+                            aria-selected={highlighted}
+                            onMouseEnter={() => setHighlightIdx(i)}
+                            onMouseDown={(e) => { e.preventDefault(); applySaved(c); }}
+                            style={{
+                              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
+                              padding: '8px 10px', borderRadius: 4, cursor: 'pointer',
+                              background: highlighted ? t.bgHover : 'transparent',
+                            }}
+                          >
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ fontSize: 12, color: t.textPrimary, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</div>
+                              <div style={{ fontSize: 11, color: t.textMuted, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {c.user}@{c.host}:{c.port}
+                                {c.database && <span style={{ marginLeft: 6 }}>· {c.database}</span>}
+                                {c.ssl && <span style={{ marginLeft: 6, color: t.accent }}>· SSL</span>}
+                              </div>
+                            </div>
+                            {appliedSaved === c.name && (
+                              <span style={{ fontSize: 10, color: t.accent, textTransform: 'uppercase', letterSpacing: '0.05em' }}>current</span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
                   )}
                 </div>
+                {appliedSaved && (
+                  <button
+                    type="button"
+                    onClick={() => removeSaved(appliedSaved)}
+                    title={`Forget '${appliedSaved}'`}
+                    style={{ height: 32, padding: '0 10px', background: 'transparent', border: `1px solid ${t.border}`, borderRadius: 5, color: t.textMuted, cursor: 'pointer', fontSize: 12, fontFamily: 'inherit' }}
+                  >Forget</button>
+                )}
               </div>
-            )}
-
-            <div style={s.field}>
-              <label style={s.label}>Connection name</label>
-              <input
-                style={s.input}
-                name="connection-name"
-                autoComplete="off"
-                value={form.name}
-                onChange={e => set('name', e.target.value)}
-                placeholder="My Database"
-              />
             </div>
 
             <div style={s.row}>
