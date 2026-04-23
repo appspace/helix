@@ -40,7 +40,8 @@ function oneLine(sql: string, max = 120): string {
 const ToolBtn = ({ title, onClick, active, children, t }: { title: string; onClick?: () => void; active?: boolean; children: React.ReactNode; t: Theme }) => (
   <button
     style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, background: active ? t.bgSurface : 'none', border: 'none', borderRadius: 5, cursor: 'pointer', color: active ? t.textPrimary : t.textMuted }}
-    title={title}
+    aria-label={title}
+    data-tooltip={title}
     onClick={onClick}
   >
     {children}
@@ -169,7 +170,7 @@ export function QueryEditor({
   return (
     <div style={s.root}>
       <div style={s.toolbar}>
-        <button style={{ ...s.runBtn, opacity: isRunning ? 0.85 : 1 }} onClick={onRun}>
+        <button style={{ ...s.runBtn, opacity: isRunning ? 0.85 : 1 }} onClick={onRun} data-tooltip={isRunning ? 'Stop query' : 'Run query (⌘↵)'}>
           {isRunning
             ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="6" y="6" width="12" height="12"/></svg>
             : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>}
@@ -333,7 +334,8 @@ export function QueryEditor({
         <div ref={historyAnchorRef} style={{ position: 'relative' }}>
           <button
             onClick={() => setHistoryOpen(o => !o)}
-            title={history.length > 0 ? `Query history (${history.length})` : 'Query history — empty'}
+            aria-label={history.length > 0 ? `Query history (${history.length})` : 'Query history — empty'}
+            data-tooltip={history.length > 0 ? `Query history (${history.length})` : 'Query history — empty'}
             style={{
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               width: 28, height: 28, background: historyOpen ? t.bgSurface : 'none',
