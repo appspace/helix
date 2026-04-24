@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, CSSProperties } from 'react';
+import { format as formatSql } from 'sql-formatter';
 import type { Theme } from '../theme';
 import type { HistoryEntry } from '../queryHistory';
 import type { SavedQuery } from '../savedQueries';
@@ -131,10 +132,34 @@ export function QueryEditor({
 
   const now = Date.now();
 
+  const [formatError, setFormatError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!formatError) return;
+    const id = window.setTimeout(() => setFormatError(null), 3500);
+    return () => window.clearTimeout(id);
+  }, [formatError]);
+
+  const handleFormat = () => {
+    if (!value.trim()) return;
+    try {
+      const formatted = formatSql(value, { language: 'mysql', keywordCase: 'upper', tabWidth: 2 });
+      if (formatted !== value) onChange(formatted);
+      setFormatError(null);
+    } catch (err) {
+      setFormatError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
       e.preventDefault();
       onRun();
+      return;
+    }
+    if (e.shiftKey && e.altKey && e.code === 'KeyF') {
+      e.preventDefault();
+      handleFormat();
       return;
     }
     if (e.key === 'Tab') {
@@ -154,7 +179,7 @@ export function QueryEditor({
     runBtn: { display: 'flex', alignItems: 'center', gap: 6, height: 28, padding: '0 12px', background: t.accent, color: t.textInverse, border: 'none', borderRadius: 5, fontSize: 12, fontWeight: 600, fontFamily: '"IBM Plex Sans", sans-serif', cursor: 'pointer' } as CSSProperties,
     sep: { width: 1, height: 18, background: t.border, margin: '0 4px' } as CSSProperties,
     schemaPill: { display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: t.textSecondary, fontFamily: 'monospace', background: t.bgElevated, border: `1px solid ${t.border}`, padding: '3px 9px', borderRadius: 4 } as CSSProperties,
-    editorWrap: { flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 } as CSSProperties,
+    editorWrap: { flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0, position: 'relative' } as CSSProperties,
     lineNums: { background: t.bgToolbar, borderRight: `1px solid ${t.borderSubtle}`, padding: '12px 0', minWidth: 40, textAlign: 'right', userSelect: 'none', flexShrink: 0, overflowY: 'hidden' } as CSSProperties,
     lineNum: { padding: '0 10px', fontSize: 11, lineHeight: '21px', color: t.textMuted, fontFamily: '"JetBrains Mono", monospace' } as CSSProperties,
     textarea: { flex: 1, background: 'transparent', border: 'none', outline: 'none', resize: 'none', padding: '12px 16px', color: t.textPrimary, fontFamily: '"JetBrains Mono", monospace', fontSize: 13, lineHeight: '21px', caretColor: t.accent, overflowY: 'auto' } as CSSProperties,
@@ -178,7 +203,7 @@ export function QueryEditor({
           <span style={{ fontSize: 10, opacity: 0.65 }}>⌘↵</span>
         </button>
         <div style={s.sep}/>
-        <ToolBtn title="Format SQL" t={t}>
+        <ToolBtn title="Format SQL (⇧⌥F)" t={t} onClick={handleFormat}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <line x1="21" y1="10" x2="7" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="21" y1="18" x2="7" y2="18"/>
           </svg>
@@ -442,6 +467,21 @@ export function QueryEditor({
           spellCheck={false}
           autoComplete="off"
         />
+        {formatError && (
+          <div
+            role="alert"
+            style={{
+              position: 'absolute', bottom: 8, right: 12, zIndex: 10,
+              maxWidth: 420, padding: '6px 10px', fontSize: 11,
+              fontFamily: '"IBM Plex Sans", sans-serif',
+              background: t.bgElevated, color: t.colorError,
+              border: `1px solid ${t.colorError}`, borderRadius: 4,
+              boxShadow: t.shadowMd,
+            }}
+          >
+            Format failed: {formatError}
+          </div>
+        )}
       </div>
     </div>
   );
