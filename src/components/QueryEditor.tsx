@@ -134,12 +134,6 @@ export function QueryEditor({
 
   const [formatError, setFormatError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!formatError) return;
-    const id = window.setTimeout(() => setFormatError(null), 3500);
-    return () => window.clearTimeout(id);
-  }, [formatError]);
-
   const handleFormat = () => {
     if (!value.trim()) return;
     try {
@@ -179,7 +173,7 @@ export function QueryEditor({
     runBtn: { display: 'flex', alignItems: 'center', gap: 6, height: 28, padding: '0 12px', background: t.accent, color: t.textInverse, border: 'none', borderRadius: 5, fontSize: 12, fontWeight: 600, fontFamily: '"IBM Plex Sans", sans-serif', cursor: 'pointer' } as CSSProperties,
     sep: { width: 1, height: 18, background: t.border, margin: '0 4px' } as CSSProperties,
     schemaPill: { display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: t.textSecondary, fontFamily: 'monospace', background: t.bgElevated, border: `1px solid ${t.border}`, padding: '3px 9px', borderRadius: 4 } as CSSProperties,
-    editorWrap: { flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0, position: 'relative' } as CSSProperties,
+    editorWrap: { flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 } as CSSProperties,
     lineNums: { background: t.bgToolbar, borderRight: `1px solid ${t.borderSubtle}`, padding: '12px 0', minWidth: 40, textAlign: 'right', userSelect: 'none', flexShrink: 0, overflowY: 'hidden' } as CSSProperties,
     lineNum: { padding: '0 10px', fontSize: 11, lineHeight: '21px', color: t.textMuted, fontFamily: '"JetBrains Mono", monospace' } as CSSProperties,
     textarea: { flex: 1, background: 'transparent', border: 'none', outline: 'none', resize: 'none', padding: '12px 16px', color: t.textPrimary, fontFamily: '"JetBrains Mono", monospace', fontSize: 13, lineHeight: '21px', caretColor: t.accent, overflowY: 'auto' } as CSSProperties,
@@ -452,6 +446,32 @@ export function QueryEditor({
           {activeSchema}
         </span>
       </div>
+      {formatError && (
+        <div
+          role="alert"
+          style={{
+            display: 'flex', alignItems: 'flex-start', gap: 8,
+            padding: '6px 10px',
+            fontSize: 11, lineHeight: 1.45,
+            fontFamily: '"IBM Plex Sans", sans-serif',
+            background: t.bgElevated, color: t.colorError,
+            borderBottom: `1px solid ${t.border}`,
+            wordBreak: 'break-word', overflowWrap: 'anywhere',
+            flexShrink: 0,
+          }}
+        >
+          <span style={{ flex: 1 }}>Format failed: {formatError}</span>
+          <button
+            onClick={() => setFormatError(null)}
+            aria-label="Dismiss"
+            style={{
+              background: 'none', border: 'none', color: t.textMuted,
+              cursor: 'pointer', padding: 0, lineHeight: 1,
+              fontFamily: 'inherit', fontSize: 14, flexShrink: 0,
+            }}
+          >×</button>
+        </div>
+      )}
       <div style={s.editorWrap}>
         <div style={s.lineNums} aria-hidden="true">
           {value.split('\n').map((_, i) => (
@@ -467,21 +487,6 @@ export function QueryEditor({
           spellCheck={false}
           autoComplete="off"
         />
-        {formatError && (
-          <div
-            role="alert"
-            style={{
-              position: 'absolute', bottom: 8, right: 12, zIndex: 10,
-              maxWidth: 420, padding: '6px 10px', fontSize: 11,
-              fontFamily: '"IBM Plex Sans", sans-serif',
-              background: t.bgElevated, color: t.colorError,
-              border: `1px solid ${t.colorError}`, borderRadius: 4,
-              boxShadow: t.shadowMd,
-            }}
-          >
-            Format failed: {formatError}
-          </div>
-        )}
       </div>
     </div>
   );
