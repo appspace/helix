@@ -1,4 +1,5 @@
 import mysql from 'mysql2/promise';
+import { resetMcpState } from './mcp-state.js';
 
 interface ConnectionConfig {
   host: string;
@@ -17,6 +18,7 @@ export async function connect(config: ConnectionConfig): Promise<void> {
     await pool.end();
     pool = null;
   }
+  resetMcpState();
 
   pool = mysql.createPool({
     host: config.host,
@@ -44,6 +46,7 @@ export async function disconnect(): Promise<void> {
     pool = null;
     activeConfig = null;
   }
+  resetMcpState();
 }
 
 export function getPool(): mysql.Pool {
