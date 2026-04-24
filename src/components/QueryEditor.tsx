@@ -142,29 +142,40 @@ export function QueryEditor({
       setFormatError(null);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      setFormatError(message);
-      highlightErrorPosition(message);
+      handleFormatError(message);
     }
   };
 
-  const highlightErrorPosition = (message: string) => {
+  const handleFormatError = (message: string) => {
     const pos = message.match(/at line (\d+) column (\d+)/i);
-    if (!pos) return;
+    if (!pos) { setFormatError(message); return; }
+
     const line = Number(pos[1]);
     const col = Number(pos[2]);
     const lines = value.split('\n');
-    let offset = 0;
-    for (let i = 0; i < line - 1 && i < lines.length; i++) offset += lines[i].length + 1;
-    offset += Math.max(0, col - 1);
-    const start = Math.min(offset, value.length);
-    const tokenMatch = message.match(/Unexpected "([^"]*)"/);
-    const tokenLen = tokenMatch ? tokenMatch[1].length : 1;
-    const end = Math.min(start + tokenLen, value.length);
+
+    let lineStart = 0;
+    for (let i = 0; i < line - 1 && i < lines.length; i++) lineStart += lines[i].length + 1;
+    const lineText = lines[line - 1] ?? '';
+    const lineEnd = lineStart + lineText.length;
+    const caret = Math.min(lineStart + Math.max(0, col - 1), lineEnd);
+
+    const snippetLen = 48;
+    const snippetStart = Math.max(lineStart, caret - Math.floor(snippetLen / 2));
+    const snippetEnd = Math.min(lineEnd, snippetStart + snippetLen);
+    const snippetPrefix = snippetStart > lineStart ? '…' : '';
+    const snippetSuffix = snippetEnd < lineEnd ? '…' : '';
+    const snippetBody = value.substring(snippetStart, caret) + '▸' + value.substring(caret, snippetEnd);
+    const snippet = snippetPrefix + snippetBody + snippetSuffix;
+
+    const enriched = `${message}\nNear (line ${line}): ${snippet}`;
+    setFormatError(enriched);
+
     requestAnimationFrame(() => {
       const el = textareaRef.current;
       if (!el) return;
       el.focus();
-      el.setSelectionRange(start, end);
+      el.setSelectionRange(lineStart, lineEnd);
     });
   };
 
@@ -469,7 +480,10 @@ export function QueryEditor({
           {activeSchema}
         </span>
       </div>
-      {formatError && (
+      {formatError && (() => {
+        const [headline, ...rest] = formatError.split('\n');
+        const nearLine = rest.find(l => l.startsWith('Near'));
+        return (
         <div
           role="alert"
           style={{
@@ -483,7 +497,14 @@ export function QueryEditor({
             flexShrink: 0,
           }}
         >
-          <span style={{ flex: 1 }}>Format failed: {formatError}</span>
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <span>Format failed: {headline}</span>
+            {nearLine && (
+              <span style={{ fontFamily: '"JetBrains Mono", monospace', color: t.textSecondary, fontSize: 10.5 }}>
+                {nearLine}
+              </span>
+            )}
+          </div>
           <button
             onClick={() => setFormatError(null)}
             aria-label="Dismiss"
@@ -494,7 +515,8 @@ export function QueryEditor({
             }}
           >×</button>
         </div>
-      )}
+        );
+      })()}
       <div style={s.editorWrap}>
         <div style={s.lineNums} aria-hidden="true">
           {value.split('\n').map((_, i) => (
