@@ -141,8 +141,31 @@ export function QueryEditor({
       if (formatted !== value) onChange(formatted);
       setFormatError(null);
     } catch (err) {
-      setFormatError(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      setFormatError(message);
+      highlightErrorPosition(message);
     }
+  };
+
+  const highlightErrorPosition = (message: string) => {
+    const pos = message.match(/at line (\d+) column (\d+)/i);
+    if (!pos) return;
+    const line = Number(pos[1]);
+    const col = Number(pos[2]);
+    const lines = value.split('\n');
+    let offset = 0;
+    for (let i = 0; i < line - 1 && i < lines.length; i++) offset += lines[i].length + 1;
+    offset += Math.max(0, col - 1);
+    const start = Math.min(offset, value.length);
+    const tokenMatch = message.match(/Unexpected "([^"]*)"/);
+    const tokenLen = tokenMatch ? tokenMatch[1].length : 1;
+    const end = Math.min(start + tokenLen, value.length);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(start, end);
+    });
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
