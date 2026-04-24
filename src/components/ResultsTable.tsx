@@ -11,7 +11,7 @@ export interface QueryResults {
 }
 
 type Row = Record<string, string | number | null>;
-type CellValue = string | number | null;
+type CellValue = string | number | boolean | null;
 
 interface DeleteTarget {
   table: string;
@@ -25,7 +25,7 @@ export interface UpdateCellTarget {
   value: CellValue;
 }
 
-type EditKind = 'number' | 'date' | 'datetime' | 'time' | 'text';
+type EditKind = 'boolean' | 'number' | 'date' | 'datetime' | 'time' | 'text';
 
 function editKindForType(type: number): EditKind {
   // MySQL column type codes
@@ -71,6 +71,13 @@ function commentFor(schemaData: SchemaData | undefined, meta: ColumnMeta | undef
   const table = schemaData.tables.find(x => x.name === meta.orgTable);
   const col = table?.columns.find(c => c.name === meta.orgName);
   return col?.comment || undefined;
+}
+
+function isBoolColumn(schemaData: SchemaData | undefined, meta: ColumnMeta | undefined): boolean {
+  if (!schemaData || !meta?.orgTable || !meta.orgName) return false;
+  const table = schemaData.tables.find(x => x.name === meta.orgTable);
+  const col = table?.columns.find(c => c.name === meta.orgName);
+  return col?.type === 'tinyint(1)';
 }
 
 interface Deletability {
@@ -123,7 +130,7 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
 
-  const [editing, setEditing] = useState<{ row: Row; col: string; draft: string; kind: EditKind; saving: boolean; error: string | null } | null>(null);
+  const [editing, setEditing] = useState<{ row: Row; col: string; draft: string; kind: EditKind; nullable: boolean; saving: boolean; error: string | null } | null>(null);
   const [confirmUpdate, setConfirmUpdate] = useState<{ row: Row; target: UpdateCellTarget; error: string | null; saving: boolean } | null>(null);
   const [insertOpen, setInsertOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
@@ -547,14 +554,17 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
               const editable = !!(onUpdateCell && meta && meta.orgTable && meta.orgName && !meta.pk);
               if (!editable || !meta) break;
               e.preventDefault();
-              const kind = editKindForType(meta.mysqlType);
+              const kind = isBoolColumn(schemaData, meta) ? 'boolean' : editKindForType(meta.mysqlType);
+              const nullable = !meta.notNull;
               const current = row[col];
-              const draft = current === null || current === undefined ? ''
+              const draft = kind === 'boolean'
+                ? (current === null || current === undefined ? 'null' : current === 1 || current === true ? 'true' : 'false')
+                : current === null || current === undefined ? ''
                 : kind === 'datetime' ? toDatetimeLocal(current)
                 : kind === 'date' ? String(current).slice(0, 10)
                 : kind === 'time' ? String(current).slice(-8)
                 : String(current);
-              setEditing({ row, col, draft, kind, saving: false, error: null });
+              setEditing({ row, col, draft, kind, nullable, saving: false, error: null });
               break;
             }
             case 'Escape': {
@@ -690,15 +700,17 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
                       onDoubleClick={(e) => {
                         if (!editable || !meta) return;
                         e.stopPropagation();
-                        const kind = editKindForType(meta.mysqlType);
+                        const kind = isBoolColumn(schemaData, meta) ? 'boolean' : editKindForType(meta.mysqlType);
+                        const nullable = !meta.notNull;
                         const current = row[col];
-                        const draft = current === null || current === undefined
-                          ? ''
+                        const draft = kind === 'boolean'
+                          ? (current === null || current === undefined ? 'null' : current === 1 || current === true ? 'true' : 'false')
+                          : current === null || current === undefined ? ''
                           : kind === 'datetime' ? toDatetimeLocal(current)
                           : kind === 'date' ? String(current).slice(0, 10)
                           : kind === 'time' ? String(current).slice(-8)
                           : String(current);
-                        setEditing({ row, col, draft, kind, saving: false, error: null });
+                        setEditing({ row, col, draft, kind, nullable, saving: false, error: null });
                       }}
                       title={(() => {
                         const comment = commentFor(schemaData, meta);
@@ -710,6 +722,7 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
                         <CellEditor
                           t={t}
                           kind={editing!.kind}
+                          nullable={editing!.nullable}
                           draft={editing!.draft}
                           saving={editing!.saving || !!confirmUpdate}
                           error={editing!.error}
@@ -731,13 +744,18 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
                             }
                             const raw = editing.draft;
                             let value: CellValue;
-                            if (raw === '' && !editedMeta.notNull) value = null;
+                            if (editing.kind === 'boolean') value = raw === 'null' ? null : raw === 'true';
+                            else if (raw === '' && !editedMeta.notNull) value = null;
                             else if (editing.kind === 'number') value = raw === '' ? '' : Number(raw);
                             else if (editing.kind === 'datetime') value = raw === '' ? null : fromDatetimeLocal(raw);
                             else value = raw;
 
                             const currentVal = editing.row[editing.col] ?? null;
-                            if (value === currentVal) { setEditing(null); return; }
+                            const normBool = (v: CellValue) => v === null ? null : (v === 1 || v === true);
+                            const unchanged = editing.kind === 'boolean'
+                              ? normBool(value) === normBool(currentVal)
+                              : value === currentVal;
+                            if (unchanged) { setEditing(null); return; }
 
                             setConfirmUpdate({
                               row: editing.row,
@@ -748,7 +766,11 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
                           }}
                         />
                       ) : (
-                        row[col] === null ? <em>NULL</em> : String(row[col])
+                        row[col] === null
+                          ? <em>NULL</em>
+                          : isBoolColumn(schemaData, meta)
+                            ? (row[col] === 1 || row[col] === true ? 'true' : 'false')
+                            : String(row[col])
                       )}
                     </td>
                   );
@@ -1002,6 +1024,7 @@ function ExportMenuItem({ t, label, hint, onClick }: { t: Theme; label: string; 
 interface CellEditorProps {
   t: Theme;
   kind: EditKind;
+  nullable?: boolean;
   draft: string;
   saving: boolean;
   error: string | null;
@@ -1012,14 +1035,8 @@ interface CellEditorProps {
   onCancel: () => void;
 }
 
-function CellEditor({ t, kind, draft, saving, error, suspended, inputRef, onChange, onCommit, onCancel }: CellEditorProps) {
-  const inputType = kind === 'number' ? 'number'
-    : kind === 'date' ? 'date'
-    : kind === 'datetime' ? 'datetime-local'
-    : kind === 'time' ? 'time'
-    : 'text';
-
-  const inputStyle: CSSProperties = {
+function CellEditor({ t, kind, nullable, draft, saving, error, suspended, inputRef, onChange, onCommit, onCancel }: CellEditorProps) {
+  const sharedStyle: CSSProperties = {
     width: '100%', boxSizing: 'border-box',
     padding: '6px 12px', margin: 0,
     background: t.bgSurface, color: t.textPrimary,
@@ -1027,6 +1044,49 @@ function CellEditor({ t, kind, draft, saving, error, suspended, inputRef, onChan
     outline: 'none', borderRadius: 2,
     fontFamily: '"JetBrains Mono", monospace', fontSize: 12,
   };
+
+  const sharedKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') { e.preventDefault(); onCommit(); }
+    else if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+  };
+
+  const errorBubble = error ? (
+    <div style={{
+      position: 'absolute', top: '100%', left: 0, zIndex: 10,
+      marginTop: 2, padding: '4px 8px',
+      background: t.colorErrorBg, border: `1px solid ${t.colorErrorBorder}`,
+      borderRadius: 3, color: t.colorError, fontSize: 11,
+      fontFamily: '"IBM Plex Sans", sans-serif', whiteSpace: 'nowrap',
+      boxShadow: t.shadowMd,
+    }}>{error}</div>
+  ) : null;
+
+  if (kind === 'boolean') {
+    return (
+      <div style={{ position: 'relative' }} onClick={(e) => e.stopPropagation()}>
+        <select
+          autoFocus
+          value={draft}
+          disabled={saving}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={sharedKeyDown}
+          onBlur={() => { if (!saving && !error && !suspended) onCancel(); }}
+          style={sharedStyle}
+        >
+          {nullable && <option value="null">NULL</option>}
+          <option value="true">true</option>
+          <option value="false">false</option>
+        </select>
+        {errorBubble}
+      </div>
+    );
+  }
+
+  const inputType = kind === 'number' ? 'number'
+    : kind === 'date' ? 'date'
+    : kind === 'datetime' ? 'datetime-local'
+    : kind === 'time' ? 'time'
+    : 'text';
 
   return (
     <div style={{ position: 'relative' }} onClick={(e) => e.stopPropagation()}>
@@ -1037,23 +1097,11 @@ function CellEditor({ t, kind, draft, saving, error, suspended, inputRef, onChan
         disabled={saving}
         step={kind === 'number' ? 'any' : undefined}
         onChange={(e) => onChange(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') { e.preventDefault(); onCommit(); }
-          else if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
-        }}
+        onKeyDown={sharedKeyDown}
         onBlur={() => { if (!saving && !error && !suspended) onCancel(); }}
-        style={inputStyle}
+        style={sharedStyle}
       />
-      {error && (
-        <div style={{
-          position: 'absolute', top: '100%', left: 0, zIndex: 10,
-          marginTop: 2, padding: '4px 8px',
-          background: t.colorErrorBg, border: `1px solid ${t.colorErrorBorder}`,
-          borderRadius: 3, color: t.colorError, fontSize: 11,
-          fontFamily: '"IBM Plex Sans", sans-serif', whiteSpace: 'nowrap',
-          boxShadow: t.shadowMd,
-        }}>{error}</div>
-      )}
+      {errorBubble}
     </div>
   );
 }

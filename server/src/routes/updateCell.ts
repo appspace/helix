@@ -15,7 +15,7 @@ export const postUpdateCell: RequestHandler = async (req, res) => {
     table?: string;
     where?: WhereClause[];
     column?: string;
-    value?: string | number | null;
+    value?: string | number | boolean | null;
   };
 
   if (!table || typeof table !== 'string' || !table.trim()) {
