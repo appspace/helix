@@ -149,7 +149,7 @@ export default function App() {
 
   const handleUpdateCell = async (
     row: Record<string, string | number | null>,
-    target: { table: string; where: { column: string; value: string | number | null }[]; column: string; value: string | number | null },
+    target: { table: string; where: { column: string; value: string | number | null }[]; column: string; value: string | number | boolean | null },
   ) => {
     await api.updateCell(activeSchema, target.table, target.where, target.column, target.value);
     setResults(prev => {
