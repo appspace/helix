@@ -121,4 +121,15 @@ export const api = {
     });
   },
 
+  mcpStatus() {
+    return request<{ connected: boolean; writesAllowed: boolean; mcpUrl: string }>('/api/mcp/status');
+  },
+
+  setMcpWrites(enabled: boolean) {
+    return request<{ writesAllowed: boolean }>('/api/mcp/writes', {
+      method: 'POST',
+      body: JSON.stringify({ enabled }),
+    });
+  },
+
 };

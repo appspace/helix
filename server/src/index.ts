@@ -8,6 +8,8 @@ import { postUpdateCell } from './routes/updateCell.js';
 import { postInsertRow } from './routes/insertRow.js';
 import { getTableDdl } from './routes/tableDdl.js';
 import { postDropTable } from './routes/dropTable.js';
+import { getMcpStatus, postMcpWrites } from './routes/mcpSettings.js';
+import { mcpHandler } from './mcp.js';
 
 const app = express();
 const PORT = process.env['PORT'] ?? 3001;
@@ -34,6 +36,14 @@ app.post('/api/update-cell', postUpdateCell);
 app.post('/api/insert-row', postInsertRow);
 app.post('/api/drop-table', postDropTable);
 
+// MCP
+app.get('/api/mcp/status', getMcpStatus);
+app.post('/api/mcp/writes', postMcpWrites);
+app.post('/mcp', mcpHandler);
+app.get('/mcp', mcpHandler);
+app.delete('/mcp', mcpHandler);
+
 app.listen(PORT, () => {
   console.log(`Helix server running at http://localhost:${PORT}`);
+  console.log(`MCP endpoint:        http://localhost:${PORT}/mcp`);
 });
