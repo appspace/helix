@@ -35,6 +35,9 @@ export default function App() {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [savedQueries, setSavedQueries] = useState<SavedQuery[]>([]);
 
+  const [mcpWritesAllowed, setMcpWritesAllowed] = useState(false);
+  const [mcpUrl, setMcpUrl] = useState<string>('');
+
   const [schemas, setSchemas] = useState<string[]>([]);
   const [activeSchema, setActiveSchema] = useState('');
   const [schemaData, setSchemaData] = useState<SchemaData>(EMPTY_SCHEMA);
@@ -291,6 +294,24 @@ export default function App() {
     if (connected && activeSchema) loadSchema(activeSchema);
   }, [activeSchema, connected, loadSchema]);
 
+  // Sync MCP status on mount and whenever connection state changes (covers page refresh).
+  useEffect(() => {
+    let cancelled = false;
+    api.mcpStatus()
+      .then(s => {
+        if (cancelled) return;
+        setMcpWritesAllowed(s.writesAllowed);
+        setMcpUrl(s.mcpUrl);
+      })
+      .catch(() => { /* server unreachable — leave defaults */ });
+    return () => { cancelled = true; };
+  }, [connected]);
+
+  const handleToggleMcpWrites = async (enabled: boolean) => {
+    const res = await api.setMcpWrites(enabled);
+    setMcpWritesAllowed(res.writesAllowed);
+  };
+
   const appStyle: CSSProperties = {
     display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden',
     background: t.bgBase,
@@ -310,6 +331,9 @@ export default function App() {
         connectionHost={connectionHost}
         connectionStatus={connected ? 'connected' : 'disconnected'}
         onDisconnect={handleDisconnect}
+        mcpWritesAllowed={mcpWritesAllowed}
+        mcpUrl={mcpUrl}
+        onToggleMcpWrites={handleToggleMcpWrites}
         themeName={themeName}
         onToggleTheme={toggleTheme}
         t={t}
@@ -336,6 +360,7 @@ export default function App() {
               isRunning={isRunning}
               activeSchema={activeSchema}
               schemaData={schemaData}
+              runtimeError={queryError}
               history={history}
               onReopenHistory={handleReopenHistory}
               onDeleteHistoryEntry={handleDeleteHistoryEntry}

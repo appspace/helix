@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, CSSProperties } from 'react';
+import { format as formatSql } from 'sql-formatter';
 import type { Theme } from '../theme';
 import type { SchemaData } from '../api';
 import type { HistoryEntry } from '../queryHistory';
@@ -25,6 +26,7 @@ interface QueryEditorProps {
   isRunning: boolean;
   activeSchema: string;
   schemaData?: SchemaData;
+  runtimeError?: string | null;
   history?: HistoryEntry[];
   onReopenHistory?: (entry: HistoryEntry) => void;
   onDeleteHistoryEntry?: (id: string) => void;
@@ -65,7 +67,7 @@ const ToolBtn = ({ title, onClick, active, children, t }: { title: string; onCli
 );
 
 export function QueryEditor({
-  value, onChange, onRun, isRunning, activeSchema, schemaData,
+  value, onChange, onRun, isRunning, activeSchema, schemaData, runtimeError,
   history = [], onReopenHistory, onDeleteHistoryEntry, onClearHistory,
   savedQueries = [], onSaveQuery, onDeleteSavedQuery, onRenameSavedQuery, onReopenSavedQuery,
   t,
@@ -147,10 +149,101 @@ export function QueryEditor({
 
   const now = Date.now();
 
+  const [formatError, setFormatError] = useState<string | null>(null);
+
+  const handleFormat = () => {
+    if (!value.trim()) return;
+    try {
+      const formatted = formatSql(value, { language: 'mysql', keywordCase: 'upper', tabWidth: 2 });
+      if (formatted !== value) onChange(formatted);
+      setFormatError(null);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      handleFormatError(message);
+    }
+  };
+
+  /** Locate error position for two message shapes:
+   *  - sql-formatter:   "... at line N column C"
+   *  - MySQL:           "... near 'TOKEN' at line N"   (no column)
+   *  Returns selection range + a caret offset used to render the ▸ snippet.
+   */
+  const locateError = (message: string, text: string) => {
+    const withCol = message.match(/at line (\d+) column (\d+)/i);
+    const mysqlLine = message.match(/near ['"`]([\s\S]+?)['"`]\s+at line (\d+)/i);
+
+    if (!withCol && !mysqlLine) return null;
+
+    let line: number, caretInLine: number;
+    if (withCol) {
+      line = Number(withCol[1]);
+      caretInLine = Math.max(0, Number(withCol[2]) - 1);
+    } else {
+      const [, token, lineStr] = mysqlLine!;
+      line = Number(lineStr);
+      const lineContent = text.split('\n')[line - 1] ?? '';
+      const idx = lineContent.indexOf(token);
+      caretInLine = idx >= 0 ? idx : 0;
+    }
+
+    const lines = text.split('\n');
+    if (line < 1 || line > lines.length) return null;
+
+    let lineStart = 0;
+    for (let i = 0; i < line - 1; i++) lineStart += lines[i].length + 1;
+    const lineText = lines[line - 1] ?? '';
+    const lineEnd = lineStart + lineText.length;
+    const caret = Math.min(lineStart + caretInLine, lineEnd);
+
+    return { line, lineStart, lineEnd, caret };
+  };
+
+  const buildSnippet = (text: string, lineStart: number, lineEnd: number, caret: number) => {
+    const snippetLen = 48;
+    const snippetStart = Math.max(lineStart, caret - Math.floor(snippetLen / 2));
+    const snippetEnd = Math.min(lineEnd, snippetStart + snippetLen);
+    const prefix = snippetStart > lineStart ? '…' : '';
+    const suffix = snippetEnd < lineEnd ? '…' : '';
+    return prefix + text.substring(snippetStart, caret) + '▸' + text.substring(caret, snippetEnd) + suffix;
+  };
+
+  const selectErrorLine = (lineStart: number, lineEnd: number) => {
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(lineStart, lineEnd);
+    });
+  };
+
+  const handleFormatError = (message: string) => {
+    const loc = locateError(message, value);
+    if (!loc) { setFormatError(message); return; }
+    const snippet = buildSnippet(value, loc.lineStart, loc.lineEnd, loc.caret);
+    setFormatError(`${message}\nNear (line ${loc.line}): ${snippet}`);
+    selectErrorLine(loc.lineStart, loc.lineEnd);
+  };
+
+  // Highlight the error line in the editor when a run error comes in from App.
+  // The message itself is rendered by ResultsTable, so we don't show the format-error strip here.
+  useEffect(() => {
+    if (!runtimeError) return;
+    const loc = locateError(runtimeError, value);
+    if (!loc) return;
+    selectErrorLine(loc.lineStart, loc.lineEnd);
+    // Intentionally excluding `value` from deps: only react to a fresh runtime error.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runtimeError]);
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
       e.preventDefault();
       onRun();
+      return;
+    }
+    if (e.shiftKey && e.altKey && e.code === 'KeyF') {
+      e.preventDefault();
+      handleFormat();
       return;
     }
     if (e.key === 'Tab') {
@@ -194,7 +287,7 @@ export function QueryEditor({
           <span style={{ fontSize: 10, opacity: 0.65 }}>⌘↵</span>
         </button>
         <div style={s.sep}/>
-        <ToolBtn title="Format SQL" t={t}>
+        <ToolBtn title="Format SQL (⇧⌥F)" t={t} onClick={handleFormat}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <line x1="21" y1="10" x2="7" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="21" y1="18" x2="7" y2="18"/>
           </svg>
@@ -443,6 +536,7 @@ export function QueryEditor({
           {activeSchema}
         </span>
       </div>
+<<<<<<< HEAD
       {(() => {
         const warn = detectLargeTable(value, schemaData);
         if (!warn) return null;
@@ -459,6 +553,43 @@ export function QueryEditor({
               <strong>{warn.table}</strong> has <strong>{warn.rows.toLocaleString()}</strong> rows — add a <code style={{ fontFamily: 'monospace' }}>LIMIT</code> to avoid loading the full table.
             </span>
           </div>
+=======
+      {formatError && (() => {
+        const [headline, ...rest] = formatError.split('\n');
+        const nearLine = rest.find(l => l.startsWith('Near'));
+        return (
+        <div
+          role="alert"
+          style={{
+            display: 'flex', alignItems: 'flex-start', gap: 8,
+            padding: '6px 10px',
+            fontSize: 11, lineHeight: 1.45,
+            fontFamily: '"IBM Plex Sans", sans-serif',
+            background: t.bgElevated, color: t.colorError,
+            borderBottom: `1px solid ${t.border}`,
+            wordBreak: 'break-word', overflowWrap: 'anywhere',
+            flexShrink: 0,
+          }}
+        >
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <span>Format failed: {headline}</span>
+            {nearLine && (
+              <span style={{ fontFamily: '"JetBrains Mono", monospace', color: t.textSecondary, fontSize: 10.5 }}>
+                {nearLine}
+              </span>
+            )}
+          </div>
+          <button
+            onClick={() => setFormatError(null)}
+            aria-label="Dismiss"
+            style={{
+              background: 'none', border: 'none', color: t.textMuted,
+              cursor: 'pointer', padding: 0, lineHeight: 1,
+              fontFamily: 'inherit', fontSize: 14, flexShrink: 0,
+            }}
+          >×</button>
+        </div>
+>>>>>>> origin/main
         );
       })()}
       <div style={s.editorWrap}>

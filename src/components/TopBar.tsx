@@ -17,14 +17,21 @@ interface TopBarProps {
   connectionHost?: string | null;
   connectionStatus: 'connected' | 'disconnected' | 'error';
   onDisconnect?: () => void;
+  mcpWritesAllowed?: boolean;
+  mcpUrl?: string;
+  onToggleMcpWrites?: (enabled: boolean) => void | Promise<void>;
   themeName: ThemeName;
   onToggleTheme: () => void;
   t: Theme;
 }
 
-export function TopBar({ tabs, activeTab, onTabChange, onNewTab, onCloseTab, connectionName, connectionHost, connectionStatus, onDisconnect, themeName, onToggleTheme, t }: TopBarProps) {
+export function TopBar({ tabs, activeTab, onTabChange, onNewTab, onCloseTab, connectionName, connectionHost, connectionStatus, onDisconnect, mcpWritesAllowed, mcpUrl, onToggleMcpWrites, themeName, onToggleTheme, t }: TopBarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [mcpBusy, setMcpBusy] = useState(false);
+  const [mcpError, setMcpError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const canDisconnect = connectionStatus === 'connected' && !!onDisconnect;
+  const isConnected = connectionStatus === 'connected';
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -139,7 +146,7 @@ export function TopBar({ tabs, activeTab, onTabChange, onNewTab, onCloseTab, con
             onClick={(e) => e.stopPropagation()}
             style={{
               position: 'absolute', top: '100%', right: 8, marginTop: 4, zIndex: 100,
-              minWidth: 220, background: t.bgElevated, border: `1px solid ${t.border}`,
+              minWidth: 260, background: t.bgElevated, border: `1px solid ${t.border}`,
               borderRadius: 4, boxShadow: t.shadowMd, padding: 4,
               fontFamily: '"IBM Plex Sans", sans-serif', fontSize: 12,
             }}
@@ -155,6 +162,83 @@ export function TopBar({ tabs, activeTab, onTabChange, onNewTab, onCloseTab, con
                 <div style={{ fontSize: 11, color: t.textMuted, fontFamily: 'monospace', marginTop: connectionName !== connectionHost ? 2 : 0, whiteSpace: 'nowrap' }}>{connectionHost}</div>
               </div>
             )}
+
+            {onToggleMcpWrites && (
+              <div style={{
+                padding: '8px 10px', borderBottom: `1px solid ${t.borderSubtle}`,
+                marginBottom: 4,
+              }}>
+                <div style={{ fontSize: 10, color: t.textMuted, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>MCP server</div>
+
+                {mcpUrl && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                    <code style={{ flex: 1, fontSize: 11, color: t.textSecondary, fontFamily: 'monospace', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{mcpUrl}</code>
+                    <button
+                      onClick={async () => {
+                        try {
+                          await navigator.clipboard.writeText(mcpUrl);
+                          setCopied(true);
+                          setTimeout(() => setCopied(false), 1200);
+                        } catch { /* ignore */ }
+                      }}
+                      title="Copy URL"
+                      style={{ background: 'none', border: `1px solid ${t.borderSubtle}`, color: t.textMuted, borderRadius: 3, padding: '2px 6px', fontSize: 10, cursor: 'pointer', fontFamily: 'inherit' }}
+                    >
+                      {copied ? 'Copied' : 'Copy'}
+                    </button>
+                  </div>
+                )}
+
+                <label style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  gap: 10, cursor: isConnected && !mcpBusy ? 'pointer' : 'default',
+                  opacity: isConnected ? 1 : 0.55,
+                }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+                    <span style={{ color: t.textPrimary, fontSize: 12 }}>Allow MCP to modify data</span>
+                    <span style={{ color: t.textMuted, fontSize: 10.5 }}>
+                      {isConnected
+                        ? 'INSERT, UPDATE, DELETE via MCP'
+                        : 'Connect to a database to enable'}
+                    </span>
+                  </div>
+                  <span
+                    role="switch"
+                    aria-checked={!!mcpWritesAllowed}
+                    onClick={async () => {
+                      if (!isConnected || mcpBusy || !onToggleMcpWrites) return;
+                      setMcpBusy(true);
+                      setMcpError(null);
+                      try {
+                        await onToggleMcpWrites(!mcpWritesAllowed);
+                      } catch (e) {
+                        setMcpError(e instanceof Error ? e.message : String(e));
+                      } finally {
+                        setMcpBusy(false);
+                      }
+                    }}
+                    style={{
+                      position: 'relative', width: 28, height: 16, borderRadius: 10,
+                      background: mcpWritesAllowed ? t.accent : t.borderSubtle,
+                      transition: 'background 150ms ease',
+                      flexShrink: 0,
+                      cursor: isConnected && !mcpBusy ? 'pointer' : 'default',
+                    }}
+                  >
+                    <span style={{
+                      position: 'absolute', top: 2, left: mcpWritesAllowed ? 14 : 2,
+                      width: 12, height: 12, borderRadius: '50%', background: '#fff',
+                      transition: 'left 150ms ease',
+                    }}/>
+                  </span>
+                </label>
+
+                {mcpError && (
+                  <div style={{ marginTop: 6, fontSize: 10.5, color: t.colorError }}>{mcpError}</div>
+                )}
+              </div>
+            )}
+
             <button
               onClick={() => { setMenuOpen(false); onDisconnect?.(); }}
               style={{
