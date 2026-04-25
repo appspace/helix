@@ -80,6 +80,24 @@ function isBoolColumn(schemaData: SchemaData | undefined, meta: ColumnMeta | und
   return col?.type === 'tinyint(1)';
 }
 
+function cellDisplayValue(val: string | number | boolean | null, meta: ColumnMeta | undefined, schemaData: SchemaData | undefined): string {
+  if (val === null) return '';
+  if (isBoolColumn(schemaData, meta)) return val === 1 || val === true ? 'true' : 'false';
+  return String(val);
+}
+
+function copyToClipboard(text: string) {
+  navigator.clipboard.writeText(text).catch(() => {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+  });
+}
+
 interface Deletability {
   target: DeleteTarget | null;
   reason: string | null;
@@ -125,7 +143,7 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
   const [sortCol, setSortCol] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [selectedRow, setSelectedRow] = useState<number | null>(null);
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; row: Row } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; row: Row; col: string | null } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<{ row: Row; target: DeleteTarget } | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -572,6 +590,24 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
               setSelectedCol(null);
               break;
             }
+            case 'c': {
+              if (!(e.ctrlKey || e.metaKey)) break;
+              if (selectedRow === null) break;
+              e.preventDefault();
+              const row = filtered[selectedRow];
+              if (selectedCol !== null) {
+                const col = displayCols[selectedCol];
+                const meta = results.columnMeta?.find(m => m.name === col);
+                copyToClipboard(cellDisplayValue(row[col] ?? null, meta, schemaData));
+              } else {
+                const text = displayCols.map(col => {
+                  const meta = results.columnMeta?.find(m => m.name === col);
+                  return cellDisplayValue(row[col] ?? null, meta, schemaData);
+                }).join('\t');
+                copyToClipboard(text);
+              }
+              break;
+            }
           }
         }}
       >
@@ -679,7 +715,7 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
                   e.preventDefault();
                   setSelectedRow(i);
                   setSelectedCol(null);
-                  setContextMenu({ x: e.clientX, y: e.clientY, row });
+                  setContextMenu({ x: e.clientX, y: e.clientY, row, col: null });
                 }}
               >
                 <td style={{ ...s.td, color: t.textMuted, textAlign: 'right', paddingRight: 10, fontSize: 10, fontFamily: 'monospace' }}>{i + 1}</td>
@@ -692,6 +728,13 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
                     <td
                       key={col}
                       onClick={(e) => { e.stopPropagation(); setSelectedRow(i); setSelectedCol(colIdx); tableWrapRef.current?.focus(); }}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setSelectedRow(i);
+                        setSelectedCol(colIdx);
+                        setContextMenu({ x: e.clientX, y: e.clientY, row, col });
+                      }}
                       style={{
                         ...cellStyle(row[col] ?? null),
                         padding: isEditing ? 0 : undefined,
@@ -802,6 +845,12 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
 
       {contextMenu && (() => {
         const { target, reason } = resolveDeleteTarget(contextMenu.row, results.columnMeta);
+        const menuItemStyle: CSSProperties = {
+          width: '100%', textAlign: 'left', padding: '6px 10px', border: 'none',
+          background: 'transparent', color: t.textPrimary,
+          cursor: 'pointer', borderRadius: 3, fontSize: 12, fontFamily: 'inherit',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16,
+        };
         return (
           <div
             onClick={(e) => e.stopPropagation()}
@@ -812,6 +861,38 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
               padding: 4, fontFamily: '"IBM Plex Sans", sans-serif', fontSize: 12,
             }}
           >
+            {contextMenu.col !== null && (
+              <button
+                style={menuItemStyle}
+                onClick={() => {
+                  const meta = results.columnMeta?.find(m => m.name === contextMenu.col);
+                  copyToClipboard(cellDisplayValue(contextMenu.row[contextMenu.col!] ?? null, meta, schemaData));
+                  setContextMenu(null);
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = t.bgHover; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+              >
+                <span>Copy cell</span>
+                <span style={{ fontSize: 10, color: t.textMuted }}>Ctrl+C</span>
+              </button>
+            )}
+            <button
+              style={menuItemStyle}
+              onClick={() => {
+                const text = displayCols.map(col => {
+                  const meta = results.columnMeta?.find(m => m.name === col);
+                  return cellDisplayValue(contextMenu.row[col] ?? null, meta, schemaData);
+                }).join('\t');
+                copyToClipboard(text);
+                setContextMenu(null);
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = t.bgHover; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+            >
+              <span>Copy row</span>
+              {contextMenu.col === null && <span style={{ fontSize: 10, color: t.textMuted }}>Ctrl+C</span>}
+            </button>
+            <div style={{ height: 1, background: t.borderSubtle, margin: '4px 0' }} />
             <button
               disabled={!target}
               onClick={() => {
@@ -822,7 +903,7 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
               }}
               style={{
                 width: '100%', textAlign: 'left', padding: '6px 10px', border: 'none',
-                background: 'transparent', color: target ? t.textPrimary : t.textMuted,
+                background: 'transparent', color: target ? t.colorError : t.textMuted,
                 cursor: target ? 'pointer' : 'not-allowed', borderRadius: 3, fontSize: 12,
                 fontFamily: 'inherit',
               }}
