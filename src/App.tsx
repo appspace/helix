@@ -359,6 +359,7 @@ export default function App() {
               onRun={handleRun}
               isRunning={isRunning}
               activeSchema={activeSchema}
+              schemaData={schemaData}
               runtimeError={queryError}
               history={history}
               onReopenHistory={handleReopenHistory}

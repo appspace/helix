@@ -93,6 +93,7 @@ function copyToClipboard(text: string) {
     ta.style.cssText = 'position:fixed;opacity:0';
     document.body.appendChild(ta);
     ta.select();
+    // Fallback for non-secure contexts where the Clipboard API is unavailable.
     document.execCommand('copy');
     document.body.removeChild(ta);
   });
