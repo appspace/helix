@@ -536,7 +536,6 @@ export function QueryEditor({
           {activeSchema}
         </span>
       </div>
-<<<<<<< HEAD
       {(() => {
         const warn = detectLargeTable(value, schemaData);
         if (!warn) return null;
@@ -553,7 +552,8 @@ export function QueryEditor({
               <strong>{warn.table}</strong> has <strong>{warn.rows.toLocaleString()}</strong> rows — add a <code style={{ fontFamily: 'monospace' }}>LIMIT</code> to avoid loading the full table.
             </span>
           </div>
-=======
+        );
+      })()}
       {formatError && (() => {
         const [headline, ...rest] = formatError.split('\n');
         const nearLine = rest.find(l => l.startsWith('Near'));
@@ -589,7 +589,6 @@ export function QueryEditor({
             }}
           >×</button>
         </div>
->>>>>>> origin/main
         );
       })()}
       <div style={s.editorWrap}>
