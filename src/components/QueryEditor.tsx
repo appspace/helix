@@ -10,6 +10,7 @@ interface QueryEditorProps {
   onRun: () => void;
   isRunning: boolean;
   activeSchema: string;
+  runtimeError?: string | null;
   history?: HistoryEntry[];
   onReopenHistory?: (entry: HistoryEntry) => void;
   onDeleteHistoryEntry?: (id: string) => void;
@@ -50,7 +51,7 @@ const ToolBtn = ({ title, onClick, active, children, t }: { title: string; onCli
 );
 
 export function QueryEditor({
-  value, onChange, onRun, isRunning, activeSchema,
+  value, onChange, onRun, isRunning, activeSchema, runtimeError,
   history = [], onReopenHistory, onDeleteHistoryEntry, onClearHistory,
   savedQueries = [], onSaveQuery, onDeleteSavedQuery, onRenameSavedQuery, onReopenSavedQuery,
   t,
@@ -146,31 +147,51 @@ export function QueryEditor({
     }
   };
 
-  const handleFormatError = (message: string) => {
-    const pos = message.match(/at line (\d+) column (\d+)/i);
-    if (!pos) { setFormatError(message); return; }
+  /** Locate error position for two message shapes:
+   *  - sql-formatter:   "... at line N column C"
+   *  - MySQL:           "... near 'TOKEN' at line N"   (no column)
+   *  Returns selection range + a caret offset used to render the ▸ snippet.
+   */
+  const locateError = (message: string, text: string) => {
+    const withCol = message.match(/at line (\d+) column (\d+)/i);
+    const mysqlLine = message.match(/near ['"`]([\s\S]+?)['"`]\s+at line (\d+)/i);
 
-    const line = Number(pos[1]);
-    const col = Number(pos[2]);
-    const lines = value.split('\n');
+    if (!withCol && !mysqlLine) return null;
+
+    let line: number, caretInLine: number;
+    if (withCol) {
+      line = Number(withCol[1]);
+      caretInLine = Math.max(0, Number(withCol[2]) - 1);
+    } else {
+      const [, token, lineStr] = mysqlLine!;
+      line = Number(lineStr);
+      const lineContent = text.split('\n')[line - 1] ?? '';
+      const idx = lineContent.indexOf(token);
+      caretInLine = idx >= 0 ? idx : 0;
+    }
+
+    const lines = text.split('\n');
+    if (line < 1 || line > lines.length) return null;
 
     let lineStart = 0;
-    for (let i = 0; i < line - 1 && i < lines.length; i++) lineStart += lines[i].length + 1;
+    for (let i = 0; i < line - 1; i++) lineStart += lines[i].length + 1;
     const lineText = lines[line - 1] ?? '';
     const lineEnd = lineStart + lineText.length;
-    const caret = Math.min(lineStart + Math.max(0, col - 1), lineEnd);
+    const caret = Math.min(lineStart + caretInLine, lineEnd);
 
+    return { line, lineStart, lineEnd, caret };
+  };
+
+  const buildSnippet = (text: string, lineStart: number, lineEnd: number, caret: number) => {
     const snippetLen = 48;
     const snippetStart = Math.max(lineStart, caret - Math.floor(snippetLen / 2));
     const snippetEnd = Math.min(lineEnd, snippetStart + snippetLen);
-    const snippetPrefix = snippetStart > lineStart ? '…' : '';
-    const snippetSuffix = snippetEnd < lineEnd ? '…' : '';
-    const snippetBody = value.substring(snippetStart, caret) + '▸' + value.substring(caret, snippetEnd);
-    const snippet = snippetPrefix + snippetBody + snippetSuffix;
+    const prefix = snippetStart > lineStart ? '…' : '';
+    const suffix = snippetEnd < lineEnd ? '…' : '';
+    return prefix + text.substring(snippetStart, caret) + '▸' + text.substring(caret, snippetEnd) + suffix;
+  };
 
-    const enriched = `${message}\nNear (line ${line}): ${snippet}`;
-    setFormatError(enriched);
-
+  const selectErrorLine = (lineStart: number, lineEnd: number) => {
     requestAnimationFrame(() => {
       const el = textareaRef.current;
       if (!el) return;
@@ -178,6 +199,25 @@ export function QueryEditor({
       el.setSelectionRange(lineStart, lineEnd);
     });
   };
+
+  const handleFormatError = (message: string) => {
+    const loc = locateError(message, value);
+    if (!loc) { setFormatError(message); return; }
+    const snippet = buildSnippet(value, loc.lineStart, loc.lineEnd, loc.caret);
+    setFormatError(`${message}\nNear (line ${loc.line}): ${snippet}`);
+    selectErrorLine(loc.lineStart, loc.lineEnd);
+  };
+
+  // Highlight the error line in the editor when a run error comes in from App.
+  // The message itself is rendered by ResultsTable, so we don't show the format-error strip here.
+  useEffect(() => {
+    if (!runtimeError) return;
+    const loc = locateError(runtimeError, value);
+    if (!loc) return;
+    selectErrorLine(loc.lineStart, loc.lineEnd);
+    // Intentionally excluding `value` from deps: only react to a fresh runtime error.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runtimeError]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
