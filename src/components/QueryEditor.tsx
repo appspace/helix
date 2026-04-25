@@ -1,7 +1,22 @@
 import { useEffect, useRef, useState, CSSProperties } from 'react';
 import type { Theme } from '../theme';
+import type { SchemaData } from '../api';
 import type { HistoryEntry } from '../queryHistory';
 import type { SavedQuery } from '../savedQueries';
+
+const LARGE_ROW_THRESHOLD = 5_000;
+
+function detectLargeTable(sql: string, schemaData: SchemaData | undefined): { table: string; rows: number } | null {
+  if (!schemaData || !sql.trim()) return null;
+  if (!/\bSELECT\b/i.test(sql)) return null;
+  if (/\bLIMIT\b/i.test(sql)) return null;
+  const match = sql.match(/\bFROM\s+`?(\w+)`?/i);
+  if (!match) return null;
+  const name = match[1].toLowerCase();
+  const table = schemaData.tables.find(t => t.name.toLowerCase() === name);
+  if (!table || table.rows <= LARGE_ROW_THRESHOLD) return null;
+  return { table: table.name, rows: table.rows };
+}
 
 interface QueryEditorProps {
   value: string;
@@ -9,6 +24,7 @@ interface QueryEditorProps {
   onRun: () => void;
   isRunning: boolean;
   activeSchema: string;
+  schemaData?: SchemaData;
   history?: HistoryEntry[];
   onReopenHistory?: (entry: HistoryEntry) => void;
   onDeleteHistoryEntry?: (id: string) => void;
@@ -49,7 +65,7 @@ const ToolBtn = ({ title, onClick, active, children, t }: { title: string; onCli
 );
 
 export function QueryEditor({
-  value, onChange, onRun, isRunning, activeSchema,
+  value, onChange, onRun, isRunning, activeSchema, schemaData,
   history = [], onReopenHistory, onDeleteHistoryEntry, onClearHistory,
   savedQueries = [], onSaveQuery, onDeleteSavedQuery, onRenameSavedQuery, onReopenSavedQuery,
   t,
@@ -427,6 +443,24 @@ export function QueryEditor({
           {activeSchema}
         </span>
       </div>
+      {(() => {
+        const warn = detectLargeTable(value, schemaData);
+        if (!warn) return null;
+        return (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 8, padding: '5px 14px',
+            background: t.colorWarningBg, borderBottom: `1px solid ${t.colorWarning}40`,
+            flexShrink: 0,
+          }}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={t.colorWarning} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+            </svg>
+            <span style={{ fontSize: 11, color: t.colorWarning, fontFamily: '"IBM Plex Sans", sans-serif' }}>
+              <strong>{warn.table}</strong> has <strong>{warn.rows.toLocaleString()}</strong> rows — add a <code style={{ fontFamily: 'monospace' }}>LIMIT</code> to avoid loading the full table.
+            </span>
+          </div>
+        );
+      })()}
       <div style={s.editorWrap}>
         <div style={s.lineNums} aria-hidden="true">
           {value.split('\n').map((_, i) => (

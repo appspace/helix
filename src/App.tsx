@@ -335,6 +335,7 @@ export default function App() {
               onRun={handleRun}
               isRunning={isRunning}
               activeSchema={activeSchema}
+              schemaData={schemaData}
               history={history}
               onReopenHistory={handleReopenHistory}
               onDeleteHistoryEntry={handleDeleteHistoryEntry}

@@ -359,8 +359,6 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
       }))
     : sorted;
 
-  const LARGE_ROW_THRESHOLD = 5_000;
-
   const formatExecTime = (ms: number) => ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(2)}s`;
 
   const exportBaseName = (() => {
@@ -459,21 +457,6 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
           )}
         </div>
       </div>
-
-      {rows.length > LARGE_ROW_THRESHOLD && (
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 8, padding: '5px 14px',
-          background: t.colorWarningBg, borderBottom: `1px solid ${t.colorWarning}40`,
-          flexShrink: 0,
-        }}>
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={t.colorWarning} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
-          </svg>
-          <span style={{ fontSize: 11, color: t.colorWarning, fontFamily: '"IBM Plex Sans", sans-serif' }}>
-            <strong>{rows.length.toLocaleString()}</strong> rows returned — consider adding a <code style={{ fontFamily: 'monospace' }}>LIMIT</code> to your query to avoid loading large result sets.
-          </span>
-        </div>
-      )}
 
       {filterOpen && (
         <div style={{
