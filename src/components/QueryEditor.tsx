@@ -11,7 +11,7 @@ function detectLargeTable(sql: string, schemaData: SchemaData | undefined): { ta
   if (!schemaData || !sql.trim()) return null;
   if (!/\bSELECT\b/i.test(sql)) return null;
   if (/\bLIMIT\b/i.test(sql)) return null;
-  const match = sql.match(/\bFROM\s+`?(\w+)`?/i);
+  const match = sql.match(/\bFROM\s+(?:`?\w+`?\.)?`?(\w+)`?/i);
   if (!match) return null;
   const name = match[1].toLowerCase();
   const table = schemaData.tables.find(t => t.name.toLowerCase() === name);
@@ -276,6 +276,8 @@ export function QueryEditor({
     } as CSSProperties,
   };
 
+  const largeTableWarn = detectLargeTable(value, schemaData);
+
   return (
     <div style={s.root}>
       <div style={s.toolbar}>
@@ -536,24 +538,23 @@ export function QueryEditor({
           {activeSchema}
         </span>
       </div>
-      {(() => {
-        const warn = detectLargeTable(value, schemaData);
-        if (!warn) return null;
-        return (
-          <div style={{
+      {largeTableWarn && (
+        <div
+          role="alert"
+          style={{
             display: 'flex', alignItems: 'center', gap: 8, padding: '5px 14px',
             background: t.colorWarningBg, borderBottom: `1px solid ${t.colorWarning}40`,
             flexShrink: 0,
-          }}>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={t.colorWarning} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
-            </svg>
-            <span style={{ fontSize: 11, color: t.colorWarning, fontFamily: '"IBM Plex Sans", sans-serif' }}>
-              <strong>{warn.table}</strong> has <strong>{warn.rows.toLocaleString()}</strong> rows — add a <code style={{ fontFamily: 'monospace' }}>LIMIT</code> to avoid loading the full table.
-            </span>
-          </div>
-        );
-      })()}
+          }}
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={t.colorWarning} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+          <span style={{ fontSize: 11, color: t.colorWarning, fontFamily: '"IBM Plex Sans", sans-serif' }}>
+            <strong>{largeTableWarn.table}</strong> has <strong>{largeTableWarn.rows.toLocaleString()}</strong> rows — add a <code style={{ fontFamily: 'monospace' }}>LIMIT</code> to avoid loading the full table.
+          </span>
+        </div>
+      )}
       {formatError && (() => {
         const [headline, ...rest] = formatError.split('\n');
         const nearLine = rest.find(l => l.startsWith('Near'));
