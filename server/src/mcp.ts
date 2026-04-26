@@ -1,5 +1,5 @@
 import type { RequestHandler } from 'express';
-import type { RowDataPacket, FieldPacket } from 'mysql2/promise';
+import type { RowDataPacket, FieldPacket, PoolConnection } from 'mysql2/promise';
 import mysql from 'mysql2/promise';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -37,9 +37,20 @@ function serializeRows(rows: RowDataPacket[], columns: string[]): Record<string,
   });
 }
 
-async function useSchema(pool: mysql.Pool, schema?: string): Promise<void> {
-  if (!schema) return;
-  await pool.query(`USE \`${schema.replace(/`/g, '')}\``);
+// Acquires a single connection, optionally switches schema, runs fn, then releases.
+// Guarantees USE and the subsequent query land on the same connection.
+async function withSchema<T>(
+  pool: mysql.Pool,
+  schema: string | undefined,
+  fn: (conn: PoolConnection) => Promise<T>,
+): Promise<T> {
+  const conn = await pool.getConnection();
+  try {
+    if (schema) await conn.query(`USE \`${schema.replace(/`/g, '')}\``);
+    return await fn(conn);
+  } finally {
+    conn.release();
+  }
 }
 
 function toolError(message: string) {
@@ -201,26 +212,27 @@ export function buildMcpServer(): McpServer {
       const cap = limit ?? DEFAULT_ROW_LIMIT;
       try {
         const pool = getPool();
-        await useSchema(pool, schema);
-        const start = Date.now();
-        const [rows, fields]: [RowDataPacket[], FieldPacket[]] = await pool.query(sql) as [RowDataPacket[], FieldPacket[]];
-        const executionTime = Date.now() - start;
+        return await withSchema(pool, schema, async (conn) => {
+          const start = Date.now();
+          const [rows, fields]: [RowDataPacket[], FieldPacket[]] = await conn.query(sql) as [RowDataPacket[], FieldPacket[]];
+          const executionTime = Date.now() - start;
 
-        if (!Array.isArray(rows)) {
-          return toolJson({ columns: [], rows: [], executionTime });
-        }
+          if (!Array.isArray(rows)) {
+            return toolJson({ columns: [], rows: [], executionTime });
+          }
 
-        const columns = fields.map(f => f.name);
-        const totalRows = rows.length;
-        const capped = rows.slice(0, cap);
-        return toolJson({
-          columns,
-          rows: serializeRows(capped, columns),
-          rowCount: capped.length,
-          totalRows,
-          truncated: totalRows > capped.length,
-          limitApplied: cap,
-          executionTime,
+          const columns = fields.map(f => f.name);
+          const totalRows = rows.length;
+          const capped = rows.slice(0, cap);
+          return toolJson({
+            columns,
+            rows: serializeRows(capped, columns),
+            rowCount: capped.length,
+            totalRows,
+            truncated: totalRows > capped.length,
+            limitApplied: cap,
+            executionTime,
+          });
         });
       } catch (e) {
         return toolError(e instanceof Error ? e.message : String(e));
@@ -262,15 +274,16 @@ export function buildMcpServer(): McpServer {
 
       try {
         const pool = getPool();
-        await useSchema(pool, schema);
-        const start = Date.now();
-        const [result] = await pool.query(sql) as unknown as [{ affectedRows?: number; insertId?: number; changedRows?: number }];
-        const executionTime = Date.now() - start;
-        return toolJson({
-          affectedRows: result.affectedRows ?? 0,
-          changedRows: result.changedRows ?? 0,
-          insertId: result.insertId ?? null,
-          executionTime,
+        return await withSchema(pool, schema, async (conn) => {
+          const start = Date.now();
+          const [result] = await conn.query(sql) as unknown as [{ affectedRows?: number; insertId?: number; changedRows?: number }];
+          const executionTime = Date.now() - start;
+          return toolJson({
+            affectedRows: result.affectedRows ?? 0,
+            changedRows: result.changedRows ?? 0,
+            insertId: result.insertId ?? null,
+            executionTime,
+          });
         });
       } catch (e) {
         return toolError(e instanceof Error ? e.message : String(e));
