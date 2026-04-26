@@ -27,46 +27,50 @@ export const getSchema: RequestHandler = async (req, res) => {
   try {
     const pool = getPool();
 
-    const [tables] = await pool.query<mysql.RowDataPacket[]>(
-      `SELECT TABLE_NAME AS name, TABLE_ROWS AS row_count, TABLE_COMMENT AS comment
-       FROM information_schema.TABLES
-       WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE'
-       ORDER BY TABLE_NAME`,
-      [schema]
-    );
-
-    const [columns] = await pool.query<mysql.RowDataPacket[]>(
-      `SELECT TABLE_NAME AS tbl, COLUMN_NAME AS col, COLUMN_TYPE AS col_type,
-              DATA_TYPE AS data_type,
-              IF(COLUMN_KEY = 'PRI', 1, 0) AS is_pk,
-              IF(IS_NULLABLE = 'YES', 1, 0) AS nullable,
-              COLUMN_DEFAULT AS col_default,
-              EXTRA AS extra,
-              COLUMN_COMMENT AS comment
-       FROM information_schema.COLUMNS
-       WHERE TABLE_SCHEMA = ?
-       ORDER BY TABLE_NAME, ORDINAL_POSITION`,
-      [schema]
-    );
-
-    const [views] = await pool.query<mysql.RowDataPacket[]>(
-      `SELECT TABLE_NAME AS name FROM information_schema.VIEWS
-       WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME`,
-      [schema]
-    );
-
-    const [procedures] = await pool.query<mysql.RowDataPacket[]>(
-      `SELECT ROUTINE_NAME AS name FROM information_schema.ROUTINES
-       WHERE ROUTINE_SCHEMA = ? AND ROUTINE_TYPE = 'PROCEDURE'
-       ORDER BY ROUTINE_NAME`,
-      [schema]
-    );
-
-    const [triggers] = await pool.query<mysql.RowDataPacket[]>(
-      `SELECT TRIGGER_NAME AS name FROM information_schema.TRIGGERS
-       WHERE TRIGGER_SCHEMA = ? ORDER BY TRIGGER_NAME`,
-      [schema]
-    );
+    const [
+      [tables],
+      [columns],
+      [views],
+      [procedures],
+      [triggers],
+    ] = await Promise.all([
+      pool.query<mysql.RowDataPacket[]>(
+        `SELECT TABLE_NAME AS name, TABLE_ROWS AS row_count, TABLE_COMMENT AS comment
+         FROM information_schema.TABLES
+         WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE'
+         ORDER BY TABLE_NAME`,
+        [schema],
+      ),
+      pool.query<mysql.RowDataPacket[]>(
+        `SELECT TABLE_NAME AS tbl, COLUMN_NAME AS col, COLUMN_TYPE AS col_type,
+                DATA_TYPE AS data_type,
+                IF(COLUMN_KEY = 'PRI', 1, 0) AS is_pk,
+                IF(IS_NULLABLE = 'YES', 1, 0) AS nullable,
+                COLUMN_DEFAULT AS col_default,
+                EXTRA AS extra,
+                COLUMN_COMMENT AS comment
+         FROM information_schema.COLUMNS
+         WHERE TABLE_SCHEMA = ?
+         ORDER BY TABLE_NAME, ORDINAL_POSITION`,
+        [schema],
+      ),
+      pool.query<mysql.RowDataPacket[]>(
+        `SELECT TABLE_NAME AS name FROM information_schema.VIEWS
+         WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME`,
+        [schema],
+      ),
+      pool.query<mysql.RowDataPacket[]>(
+        `SELECT ROUTINE_NAME AS name FROM information_schema.ROUTINES
+         WHERE ROUTINE_SCHEMA = ? AND ROUTINE_TYPE = 'PROCEDURE'
+         ORDER BY ROUTINE_NAME`,
+        [schema],
+      ),
+      pool.query<mysql.RowDataPacket[]>(
+        `SELECT TRIGGER_NAME AS name FROM information_schema.TRIGGERS
+         WHERE TRIGGER_SCHEMA = ? ORDER BY TRIGGER_NAME`,
+        [schema],
+      ),
+    ]);
 
     const colsByTable = new Map<string, {
       name: string;
