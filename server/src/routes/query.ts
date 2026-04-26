@@ -1,6 +1,6 @@
 import type { RequestHandler } from 'express';
 import type { RowDataPacket, FieldPacket } from 'mysql2/promise';
-import { getPool } from '../db.js';
+import { withSchema } from '../db.js';
 
 export const postQuery: RequestHandler = async (req, res) => {
   const { sql, schema } = req.body as { sql: string; schema?: string };
@@ -11,13 +11,7 @@ export const postQuery: RequestHandler = async (req, res) => {
   }
 
   try {
-    const pool = getPool();
-    const conn = await pool.getConnection();
-    try {
-      if (schema) {
-        await conn.query(`USE \`${schema.replace(/`/g, '')}\``);
-      }
-
+    await withSchema(schema, async (conn) => {
       const start = Date.now();
       const [rows, fields]: [RowDataPacket[], FieldPacket[]] = await conn.query(sql) as [RowDataPacket[], FieldPacket[]];
       const executionTime = Date.now() - start;
@@ -70,6 +64,8 @@ export const postQuery: RequestHandler = async (req, res) => {
           } else if (Buffer.isBuffer(val)) {
             out[col] = val.toString('hex');
           } else if (val instanceof Date) {
+            // mysql2 gives a Date for DATETIME/TIMESTAMP; .toISOString() is always UTC.
+            // Assumes the MySQL server is also UTC — displayed time will be wrong otherwise.
             out[col] = val.toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '');
           } else if (typeof val === 'bigint') {
             out[col] = val.toString();
@@ -81,9 +77,7 @@ export const postQuery: RequestHandler = async (req, res) => {
       });
 
       res.json({ columns, columnMeta, rows: serialized, executionTime });
-    } finally {
-      conn.release();
-    }
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     res.status(400).json({ error: message });

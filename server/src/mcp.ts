@@ -1,10 +1,9 @@
 import type { RequestHandler } from 'express';
-import type { RowDataPacket, FieldPacket, PoolConnection } from 'mysql2/promise';
-import mysql from 'mysql2/promise';
+import type { RowDataPacket, FieldPacket } from 'mysql2/promise';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
-import { getPool, getActiveConfig, isConnected } from './db.js';
+import { getPool, getActiveConfig, isConnected, withSchema } from './db.js';
 import { isMcpWritesAllowed } from './mcp-state.js';
 
 const DEFAULT_ROW_LIMIT = 100;
@@ -35,22 +34,6 @@ function serializeRows(rows: RowDataPacket[], columns: string[]): Record<string,
     for (const col of columns) out[col] = serializeValue(row[col]);
     return out;
   });
-}
-
-// Acquires a single connection, optionally switches schema, runs fn, then releases.
-// Guarantees USE and the subsequent query land on the same connection.
-async function withSchema<T>(
-  pool: mysql.Pool,
-  schema: string | undefined,
-  fn: (conn: PoolConnection) => Promise<T>,
-): Promise<T> {
-  const conn = await pool.getConnection();
-  try {
-    if (schema) await conn.query(`USE \`${schema.replace(/`/g, '')}\``);
-    return await fn(conn);
-  } finally {
-    conn.release();
-  }
 }
 
 function toolError(message: string) {
@@ -211,8 +194,7 @@ export function buildMcpServer(): McpServer {
 
       const cap = limit ?? DEFAULT_ROW_LIMIT;
       try {
-        const pool = getPool();
-        return await withSchema(pool, schema, async (conn) => {
+        return await withSchema(schema, async (conn) => {
           const start = Date.now();
           const [rows, fields]: [RowDataPacket[], FieldPacket[]] = await conn.query(sql) as [RowDataPacket[], FieldPacket[]];
           const executionTime = Date.now() - start;
@@ -273,8 +255,7 @@ export function buildMcpServer(): McpServer {
       }
 
       try {
-        const pool = getPool();
-        return await withSchema(pool, schema, async (conn) => {
+        return await withSchema(schema, async (conn) => {
           const start = Date.now();
           const [result] = await conn.query(sql) as unknown as [{ affectedRows?: number; insertId?: number; changedRows?: number }];
           const executionTime = Date.now() - start;

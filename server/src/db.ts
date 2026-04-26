@@ -1,4 +1,5 @@
 import mysql from 'mysql2/promise';
+import type { PoolConnection } from 'mysql2/promise';
 import { resetMcpState } from './mcp-state.js';
 
 interface ConnectionConfig {
@@ -60,6 +61,21 @@ export function getActiveConfig(): ConnectionConfig | null {
 
 export function isConnected(): boolean {
   return pool !== null;
+}
+
+// Acquires a single connection, optionally switches schema, runs fn, then releases.
+// Guarantees USE and the subsequent query land on the same connection.
+export async function withSchema<T>(
+  schema: string | undefined,
+  fn: (conn: PoolConnection) => Promise<T>,
+): Promise<T> {
+  const conn = await getPool().getConnection();
+  try {
+    if (schema) await conn.query(`USE \`${schema.replace(/`/g, '')}\``);
+    return await fn(conn);
+  } finally {
+    conn.release();
+  }
 }
 
 export async function testConnection(config: ConnectionConfig): Promise<void> {

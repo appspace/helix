@@ -2,7 +2,23 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import request from 'supertest';
 import express from 'express';
 
-vi.mock('../db.js', () => ({ getPool: vi.fn() }));
+vi.mock('../db.js', () => {
+  const getPool = vi.fn();
+  return {
+    getPool,
+    // Mirror the real withSchema behaviour so connection-pinning assertions still pass.
+    withSchema: vi.fn(async (schema: string | undefined, fn: (conn: any) => Promise<any>) => {
+      const pool = getPool();
+      const conn = await pool.getConnection();
+      try {
+        if (schema) await conn.query(`USE \`${schema.replace(/`/g, '')}\``);
+        return await fn(conn);
+      } finally {
+        conn.release();
+      }
+    }),
+  };
+});
 
 import { getPool } from '../db.js';
 import { postQuery } from './query.js';
@@ -208,5 +224,6 @@ describe('postQuery – response serialization', () => {
     expect(res.body.columns).toEqual([]);
     expect(res.body.rows).toEqual([]);
     expect(res.body.affectedRows).toBe(3);
+    expect(mockConn.release).toHaveBeenCalledTimes(1);
   });
 });
