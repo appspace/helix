@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, CSSProperties } from 'react';
 import type { Theme } from '../theme';
-import { ShowSchemaDialog } from './ShowSchemaDialog';
+import { ShowSchemaDialog, type ObjectType } from './ShowSchemaDialog';
 
 interface Column {
   name: string;
@@ -70,8 +70,8 @@ export function SchemaBrowser({ schema, activeTable, onTableSelect, onSchemaChan
   const [expanded, setExpanded] = useState({ tables: true, views: false, procedures: false, triggers: false });
   const [expandedTables, setExpandedTables] = useState<Record<string, boolean>>({});
   const [filter, setFilter] = useState('');
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; table: string } | null>(null);
-  const [showSchemaFor, setShowSchemaFor] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; name: string; type: ObjectType } | null>(null);
+  const [showSchemaFor, setShowSchemaFor] = useState<{ name: string; type: ObjectType } | null>(null);
   const [confirmDrop, setConfirmDrop] = useState<ConfirmDrop | null>(null);
   const dropInputRef = useRef<HTMLInputElement>(null);
 
@@ -162,7 +162,7 @@ export function SchemaBrowser({ schema, activeTable, onTableSelect, onSchemaChan
                   onClick={() => { onTableSelect(table.name); toggleTable(table.name); }}
                   onContextMenu={(e) => {
                     e.preventDefault();
-                    setContextMenu({ x: e.clientX, y: e.clientY, table: table.name });
+                    setContextMenu({ x: e.clientX, y: e.clientY, name: table.name, type: 'table' });
                   }}
                   title={table.comment || undefined}
                 >
@@ -190,9 +190,35 @@ export function SchemaBrowser({ schema, activeTable, onTableSelect, onSchemaChan
               </div>
             ))}
 
-            {expanded[g.key] && g.key !== 'tables' && (
-              <div style={s.emptyGroup}>No {g.label.toLowerCase()}</div>
-            )}
+            {expanded[g.key] && g.key !== 'tables' && (() => {
+              const objType: ObjectType =
+                g.key === 'views' ? 'view' :
+                g.key === 'procedures' ? 'procedure' :
+                'trigger';
+              const items: string[] = (
+                g.key === 'views' ? schema.views :
+                g.key === 'procedures' ? schema.procedures :
+                schema.triggers
+              ) ?? [];
+              const filtered = filter
+                ? items.filter(n => n.toLowerCase().includes(filter.toLowerCase()))
+                : items;
+              if (filtered.length === 0) return <div style={s.emptyGroup}>No {g.label.toLowerCase()}</div>;
+              return filtered.map(name => (
+                <div
+                  key={name}
+                  style={{ ...s.tableRow, paddingLeft: 28 }}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setContextMenu({ x: e.clientX, y: e.clientY, name, type: objType });
+                  }}
+                  onClick={() => setShowSchemaFor({ name, type: objType })}
+                  title={name}
+                >
+                  <span style={{ ...s.tableName, color: t.textSecondary }}>{name}</span>
+                </div>
+              ));
+            })()}
             <div style={s.divLine}/>
           </div>
         ))}
@@ -210,18 +236,20 @@ export function SchemaBrowser({ schema, activeTable, onTableSelect, onSchemaChan
         >
           <CtxItem
             t={t}
-            onClick={() => { setShowSchemaFor(contextMenu.table); setContextMenu(null); }}
+            onClick={() => { setShowSchemaFor({ name: contextMenu.name, type: contextMenu.type }); setContextMenu(null); }}
             icon={<><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></>}
             label="Show schema"
           />
-          <div style={{ height: 1, background: t.borderSubtle, margin: '3px 0' }}/>
-          <CtxItem
-            t={t}
-            onClick={() => { setConfirmDrop({ table: contextMenu.table, typedName: '', error: null, working: false }); setContextMenu(null); }}
-            icon={<><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M5 6l.7-2.1A2 2 0 0 1 7.6 2h8.8a2 2 0 0 1 1.9 1.9L19 6"/></>}
-            label="Drop table"
-            color={t.colorError}
-          />
+          {contextMenu.type === 'table' && (<>
+            <div style={{ height: 1, background: t.borderSubtle, margin: '3px 0' }}/>
+            <CtxItem
+              t={t}
+              onClick={() => { setConfirmDrop({ table: contextMenu.name, typedName: '', error: null, working: false }); setContextMenu(null); }}
+              icon={<><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M5 6l.7-2.1A2 2 0 0 1 7.6 2h8.8a2 2 0 0 1 1.9 1.9L19 6"/></>}
+              label="Drop table"
+              color={t.colorError}
+            />
+          </>)}
         </div>
       )}
 
@@ -292,7 +320,8 @@ export function SchemaBrowser({ schema, activeTable, onTableSelect, onSchemaChan
       {showSchemaFor && (
         <ShowSchemaDialog
           schema={activeSchema}
-          table={showSchemaFor}
+          name={showSchemaFor.name}
+          type={showSchemaFor.type}
           onClose={() => setShowSchemaFor(null)}
           t={t}
         />

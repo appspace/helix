@@ -82,8 +82,9 @@ export const api = {
     return request<SchemaData>(`/api/schema?schema=${encodeURIComponent(schema)}`);
   },
 
-  tableDdl(schema: string, table: string) {
-    return request<{ ddl: string }>(`/api/table-ddl?schema=${encodeURIComponent(schema)}&table=${encodeURIComponent(table)}`);
+  tableDdl(schema: string, name: string, type?: string) {
+    const t = type ? `&type=${encodeURIComponent(type)}` : '';
+    return request<{ ddl: string }>(`/api/table-ddl?schema=${encodeURIComponent(schema)}&table=${encodeURIComponent(name)}${t}`);
   },
 
   query(sql: string, schema: string) {
