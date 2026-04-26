@@ -1,15 +1,24 @@
 import { useEffect, useState, CSSProperties } from 'react';
 import type { Theme } from '../theme';
 import { api } from '../api';
+import type { ObjectType } from '../api';
+
+const DIALOG_TITLE: Record<ObjectType, string> = {
+  table:     'Table schema',
+  view:      'View definition',
+  procedure: 'Procedure definition',
+  trigger:   'Trigger definition',
+};
 
 interface ShowSchemaDialogProps {
   schema: string;
-  table: string;
+  name: string;
+  type: ObjectType;
   onClose: () => void;
   t: Theme;
 }
 
-export function ShowSchemaDialog({ schema, table, onClose, t }: ShowSchemaDialogProps) {
+export function ShowSchemaDialog({ schema, name, type, onClose, t }: ShowSchemaDialogProps) {
   const [ddl, setDdl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -18,11 +27,11 @@ export function ShowSchemaDialog({ schema, table, onClose, t }: ShowSchemaDialog
     let cancelled = false;
     setDdl(null);
     setError(null);
-    api.tableDdl(schema, table)
+    api.tableDdl(schema, name, type)
       .then(res => { if (!cancelled) setDdl(res.ddl); })
       .catch(err => { if (!cancelled) setError(err instanceof Error ? err.message : String(err)); });
     return () => { cancelled = true; };
-  }, [schema, table]);
+  }, [schema, name, type]);
 
   useEffect(() => {
     const key = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -61,8 +70,8 @@ export function ShowSchemaDialog({ schema, table, onClose, t }: ShowSchemaDialog
     <div style={s.overlay} onClick={onClose}>
       <div style={s.modal} onClick={(e) => e.stopPropagation()}>
         <div style={s.header}>
-          <h3 style={s.title}>Table schema</h3>
-          <span style={s.subtitle}>{schema}.{table}</span>
+          <h3 style={s.title}>{DIALOG_TITLE[type]}</h3>
+          <span style={s.subtitle}>{schema}.{name}</span>
         </div>
 
         <div style={s.body}>

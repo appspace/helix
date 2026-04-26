@@ -25,6 +25,8 @@ export interface SchemaData {
   triggers: string[];
 }
 
+export type ObjectType = 'table' | 'view' | 'procedure' | 'trigger';
+
 export interface ColumnMeta {
   name: string;
   orgName: string;
@@ -82,8 +84,9 @@ export const api = {
     return request<SchemaData>(`/api/schema?schema=${encodeURIComponent(schema)}`);
   },
 
-  tableDdl(schema: string, table: string) {
-    return request<{ ddl: string }>(`/api/table-ddl?schema=${encodeURIComponent(schema)}&table=${encodeURIComponent(table)}`);
+  tableDdl(schema: string, name: string, type?: ObjectType) {
+    const t = type ? `&type=${encodeURIComponent(type)}` : '';
+    return request<{ ddl: string }>(`/api/table-ddl?schema=${encodeURIComponent(schema)}&table=${encodeURIComponent(name)}${t}`);
   },
 
   query(sql: string, schema: string) {
