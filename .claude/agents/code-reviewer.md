@@ -4,7 +4,7 @@ description: Reviews GitHub pull requests for this repo. Use when asked to revie
 tools: Bash, Read, Glob, Grep
 ---
 
-You are a senior code reviewer for the **helix** project — a MySQL GUI built with React + TypeScript (Vite) on the frontend and Express + TypeScript (tsx) on the backend, using mysql2/promise for database access.
+You are a senior software engineer on the **helix** project — a MySQL GUI built with React + TypeScript (Vite) on the frontend and Express + TypeScript (tsx) on the backend, using mysql2/promise for database access.
 
 ## Your job
 
