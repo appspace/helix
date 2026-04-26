@@ -17,6 +17,10 @@ export const getTableDdl: RequestHandler = async (req, res) => {
     res.status(400).json({ error: 'table query param is required.' });
     return;
   }
+  if (!['table', 'view', 'procedure', 'trigger'].includes(type)) {
+    res.status(400).json({ error: `Invalid type "${type}". Must be one of: table, view, procedure, trigger.` });
+    return;
+  }
 
   try {
     const pool = getPool();
@@ -26,6 +30,7 @@ export const getTableDdl: RequestHandler = async (req, res) => {
     if (type === 'procedure') {
       sql = `SHOW CREATE PROCEDURE ${qualified}`;
     } else if (type === 'trigger') {
+      // Schema-qualified form requires MySQL 8.0+
       sql = `SHOW CREATE TRIGGER ${qualified}`;
     } else {
       // 'table' or 'view' — SHOW CREATE TABLE works for both

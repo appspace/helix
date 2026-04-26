@@ -1,8 +1,7 @@
 import { useEffect, useState, CSSProperties } from 'react';
 import type { Theme } from '../theme';
 import { api } from '../api';
-
-export type ObjectType = 'table' | 'view' | 'procedure' | 'trigger';
+import type { ObjectType } from '../api';
 
 const DIALOG_TITLE: Record<ObjectType, string> = {
   table:     'Table schema',

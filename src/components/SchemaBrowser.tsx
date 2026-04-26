@@ -1,27 +1,8 @@
 import { useState, useEffect, useRef, CSSProperties } from 'react';
 import type { Theme } from '../theme';
-import { ShowSchemaDialog, type ObjectType } from './ShowSchemaDialog';
+import type { ObjectType, SchemaData } from '../api';
+import { ShowSchemaDialog } from './ShowSchemaDialog';
 
-interface Column {
-  name: string;
-  type: string;
-  pk?: boolean;
-  comment?: string;
-}
-
-interface Table {
-  name: string;
-  rows: number | string;
-  comment?: string;
-  columns?: Column[];
-}
-
-interface SchemaData {
-  tables?: Table[];
-  views?: string[];
-  procedures?: string[];
-  triggers?: string[];
-}
 
 interface SchemaBrowserProps {
   schema: SchemaData;
@@ -64,6 +45,25 @@ interface ConfirmDrop {
   typedName: string;
   error: string | null;
   working: boolean;
+}
+
+function NonTableGroupItems({ groupKey, label, schema, filter, t, emptyStyle, rowStyle, nameStyle, onOpen, onContextMenu }: {
+  groupKey: string; label: string; schema: SchemaData; filter: string; t: Theme;
+  emptyStyle: CSSProperties; rowStyle: CSSProperties; nameStyle: CSSProperties;
+  onOpen: (name: string, type: ObjectType) => void;
+  onContextMenu: (e: React.MouseEvent, name: string, type: ObjectType) => void;
+}) {
+  const objType: ObjectType = groupKey === 'views' ? 'view' : groupKey === 'procedures' ? 'procedure' : 'trigger';
+  const items: string[] = (groupKey === 'views' ? schema.views : groupKey === 'procedures' ? schema.procedures : schema.triggers) ?? [];
+  const filtered = filter ? items.filter(n => n.toLowerCase().includes(filter.toLowerCase())) : items;
+  if (filtered.length === 0) return <div style={emptyStyle}>No {label.toLowerCase()}</div>;
+  return <>{filtered.map(name => (
+    <div key={name} style={{ ...rowStyle, paddingLeft: 28 }}
+      onContextMenu={(e) => { e.preventDefault(); onContextMenu(e, name, objType); }}
+      onClick={() => onOpen(name, objType)} title={name}>
+      <span style={{ ...nameStyle, color: t.textSecondary }}>{name}</span>
+    </div>
+  ))}</>;
 }
 
 export function SchemaBrowser({ schema, activeTable, onTableSelect, onSchemaChange, schemas, activeSchema, onDropTable, t }: SchemaBrowserProps) {
@@ -190,35 +190,20 @@ export function SchemaBrowser({ schema, activeTable, onTableSelect, onSchemaChan
               </div>
             ))}
 
-            {expanded[g.key] && g.key !== 'tables' && (() => {
-              const objType: ObjectType =
-                g.key === 'views' ? 'view' :
-                g.key === 'procedures' ? 'procedure' :
-                'trigger';
-              const items: string[] = (
-                g.key === 'views' ? schema.views :
-                g.key === 'procedures' ? schema.procedures :
-                schema.triggers
-              ) ?? [];
-              const filtered = filter
-                ? items.filter(n => n.toLowerCase().includes(filter.toLowerCase()))
-                : items;
-              if (filtered.length === 0) return <div style={s.emptyGroup}>No {g.label.toLowerCase()}</div>;
-              return filtered.map(name => (
-                <div
-                  key={name}
-                  style={{ ...s.tableRow, paddingLeft: 28 }}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    setContextMenu({ x: e.clientX, y: e.clientY, name, type: objType });
-                  }}
-                  onClick={() => setShowSchemaFor({ name, type: objType })}
-                  title={name}
-                >
-                  <span style={{ ...s.tableName, color: t.textSecondary }}>{name}</span>
-                </div>
-              ));
-            })()}
+            {expanded[g.key] && g.key !== 'tables' && (
+              <NonTableGroupItems
+                groupKey={g.key}
+                label={g.label}
+                schema={schema}
+                filter={filter}
+                t={t}
+                emptyStyle={s.emptyGroup}
+                rowStyle={s.tableRow}
+                nameStyle={s.tableName}
+                onOpen={(name, type) => setShowSchemaFor({ name, type })}
+                onContextMenu={(e, name, type) => setContextMenu({ x: e.clientX, y: e.clientY, name, type })}
+              />
+            )}
             <div style={s.divLine}/>
           </div>
         ))}
