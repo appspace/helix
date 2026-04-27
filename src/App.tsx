@@ -24,11 +24,28 @@ const EMPTY_SCHEMA: SchemaData = { tables: [], views: [], procedures: [], trigge
 
 let tabCounter = 1;
 
+const THEME_KEY = 'helix.theme';
+
+function readStoredTheme(): ThemeName {
+  try {
+    const v = localStorage.getItem(THEME_KEY);
+    return v === 'light' || v === 'dark' ? v : 'dark';
+  } catch {
+    return 'dark';
+  }
+}
+
 export default function App() {
-  const [themeName, setThemeName] = useState<ThemeName>('dark');
+  const [themeName, setThemeName] = useState<ThemeName>(readStoredTheme);
   const t = themeName === 'dark' ? DARK : LIGHT;
 
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', themeName);
+    try { localStorage.setItem(THEME_KEY, themeName); } catch { /* quota or disabled storage */ }
+  }, [themeName]);
+
   const [connected, setConnected] = useState(false);
+  const [showConnectionModal, setShowConnectionModal] = useState(true);
   const [isConnecting, setIsConnecting] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [connectionName, setConnectionName] = useState('Not connected');
@@ -65,9 +82,9 @@ export default function App() {
   }, []);
 
   const handleSchemaChange = useCallback((schema: string) => {
+    // Schema fetch is driven by the useEffect on activeSchema; only update state here.
     setActiveSchema(schema);
-    loadSchema(schema);
-  }, [loadSchema]);
+  }, []);
 
   const handleConnect = async (form: ConnectionForm) => {
     setIsConnecting(true);
@@ -78,7 +95,6 @@ export default function App() {
       const initial = form.database && list.includes(form.database)
         ? form.database
         : list[0] ?? '';
-      if (initial) await loadSchema(initial);
 
       const friendly = form.name.trim();
       setConnectionName(friendly || res.connectionName);
@@ -88,6 +104,7 @@ export default function App() {
       setSchemas(list);
       setActiveSchema(initial);
       setConnected(true);
+      setShowConnectionModal(false);
 
       // Persist non-secret fields so the user doesn't retype them next time.
       if (friendly) {
@@ -111,6 +128,7 @@ export default function App() {
   const handleDisconnect = async () => {
     try { await api.disconnect(); } catch { /* ignore */ }
     setConnected(false);
+    setShowConnectionModal(true);
     setConnectionName('Not connected');
     setConnectionHost(null);
     setHistory([]);
@@ -285,9 +303,7 @@ export default function App() {
   };
 
   const toggleTheme = () => {
-    const next: ThemeName = themeName === 'dark' ? 'light' : 'dark';
-    setThemeName(next);
-    document.documentElement.setAttribute('data-theme', next);
+    setThemeName(themeName === 'dark' ? 'light' : 'dark');
   };
 
   // Reload schema when switching schemas from the dropdown
@@ -320,6 +336,9 @@ export default function App() {
   const bodyStyle: CSSProperties = { display: 'flex', flex: 1, overflow: 'hidden' };
   const mainStyle: CSSProperties = { display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' };
 
+  const handleDismissModal = useCallback(() => setShowConnectionModal(false), []);
+  const handleOpenConnection = useCallback(() => setShowConnectionModal(true), []);
+
   return (
     <div style={appStyle}>
       <TopBar
@@ -332,6 +351,7 @@ export default function App() {
         connectionHost={connectionHost}
         connectionStatus={connected ? 'connected' : 'disconnected'}
         onDisconnect={handleDisconnect}
+        onOpenConnection={connected ? undefined : handleOpenConnection}
         mcpWritesAllowed={mcpWritesAllowed}
         mcpUrl={mcpUrl}
         onToggleMcpWrites={handleToggleMcpWrites}
@@ -389,11 +409,12 @@ export default function App() {
         </div>
       </div>
 
-      {!connected && (
+      {!connected && showConnectionModal && (
         <ConnectionManager
           onConnect={handleConnect}
           isConnecting={isConnecting}
           error={connectionError}
+          onDismiss={handleDismissModal}
           t={t}
         />
       )}

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import type { CSSProperties } from 'react';
 import type { Theme } from '../theme';
 import { api } from '../api';
@@ -18,10 +18,11 @@ interface ConnectionManagerProps {
   onConnect: (form: ConnectionForm) => void;
   isConnecting: boolean;
   error: string | null;
+  onDismiss?: () => void;
   t: Theme;
 }
 
-export function ConnectionManager({ onConnect, isConnecting, error, t }: ConnectionManagerProps) {
+export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t }: ConnectionManagerProps) {
   const [saved, setSaved] = useState<SavedConnection[]>(() => listSavedConnections());
   const initialForm: ConnectionForm = saved[0]
     ? { ...saved[0], password: '' }
@@ -39,6 +40,13 @@ export function ConnectionManager({ onConnect, isConnecting, error, t }: Connect
   const [highlightIdx, setHighlightIdx] = useState(-1);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: true } | { ok: false; error: string } | null>(null);
+
+  useEffect(() => {
+    if (!onDismiss || isConnecting) return;
+    const key = (e: KeyboardEvent) => { if (e.key === 'Escape') onDismiss(); };
+    window.addEventListener('keydown', key);
+    return () => window.removeEventListener('keydown', key);
+  }, [onDismiss, isConnecting]);
 
   const runTest = async () => {
     setTesting(true);
@@ -106,8 +114,8 @@ export function ConnectionManager({ onConnect, isConnecting, error, t }: Connect
   };
 
   return (
-    <div style={s.overlay}>
-      <div style={s.modal}>
+    <div style={s.overlay} onClick={!isConnecting ? onDismiss : undefined}>
+      <div style={s.modal} onClick={(e) => e.stopPropagation()}>
         <div style={s.header}>
           <svg width="20" height="20" viewBox="0 0 40 40" fill="none">
             <path d="M6 6 C6 6, 20 2, 20 20 C20 38, 6 34, 6 34" stroke={t.accent} strokeWidth="2.5" strokeLinecap="round"/>
@@ -151,7 +159,7 @@ export function ConnectionManager({ onConnect, isConnecting, error, t }: Connect
                       if (e.key === 'ArrowDown') { e.preventDefault(); setHighlightIdx(i => Math.min(i + 1, filteredSaved.length - 1)); }
                       else if (e.key === 'ArrowUp') { e.preventDefault(); setHighlightIdx(i => Math.max(i - 1, 0)); }
                       else if (e.key === 'Enter' && highlightIdx >= 0) { e.preventDefault(); applySaved(filteredSaved[highlightIdx]); }
-                      else if (e.key === 'Escape') { e.preventDefault(); setSuggestOpen(false); }
+                      else if (e.key === 'Escape') { e.preventDefault(); e.nativeEvent.stopImmediatePropagation(); setSuggestOpen(false); }
                     }}
                     placeholder="My Database"
                   />
@@ -313,6 +321,14 @@ export function ConnectionManager({ onConnect, isConnecting, error, t }: Connect
           </div>
 
           <div style={s.footer}>
+            {onDismiss && (
+              <button
+                type="button"
+                onClick={onDismiss}
+                disabled={isConnecting}
+                style={{ ...s.testBtn, opacity: isConnecting ? 0.5 : 1, cursor: isConnecting ? 'not-allowed' : 'pointer' }}
+              >Cancel</button>
+            )}
             <button
               type="button"
               style={{ ...s.testBtn, opacity: testing ? 0.7 : 1, cursor: testing ? 'wait' : 'pointer' }}
