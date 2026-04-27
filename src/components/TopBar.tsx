@@ -221,7 +221,7 @@ export function TopBar({ tabs, activeTab, onTabChange, onNewTab, onCloseTab, con
                     }}
                     style={{
                       position: 'relative', width: 28, height: 16, borderRadius: 10,
-                      background: mcpWritesAllowed ? t.accent : t.borderSubtle,
+                      background: mcpWritesAllowed ? t.accent : t.border,
                       transition: 'background 150ms ease',
                       flexShrink: 0,
                       cursor: isConnected && !mcpBusy ? 'pointer' : 'default',
@@ -257,7 +257,7 @@ export function TopBar({ tabs, activeTab, onTabChange, onNewTab, onCloseTab, con
                 <polyline points="16 17 21 12 16 7"/>
                 <line x1="21" y1="12" x2="9" y2="12"/>
               </svg>
-              Log Out
+              Disconnect
             </button>
           </div>
         )}
