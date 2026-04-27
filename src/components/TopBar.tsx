@@ -17,6 +17,7 @@ interface TopBarProps {
   connectionHost?: string | null;
   connectionStatus: 'connected' | 'disconnected' | 'error';
   onDisconnect?: () => void;
+  onOpenConnection?: () => void;
   mcpWritesAllowed?: boolean;
   mcpUrl?: string;
   onToggleMcpWrites?: (enabled: boolean) => void | Promise<void>;
@@ -25,7 +26,7 @@ interface TopBarProps {
   t: Theme;
 }
 
-export function TopBar({ tabs, activeTab, onTabChange, onNewTab, onCloseTab, connectionName, connectionHost, connectionStatus, onDisconnect, mcpWritesAllowed, mcpUrl, onToggleMcpWrites, themeName, onToggleTheme, t }: TopBarProps) {
+export function TopBar({ tabs, activeTab, onTabChange, onNewTab, onCloseTab, connectionName, connectionHost, connectionStatus, onDisconnect, onOpenConnection, mcpWritesAllowed, mcpUrl, onToggleMcpWrites, themeName, onToggleTheme, t }: TopBarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [mcpBusy, setMcpBusy] = useState(false);
   const [mcpError, setMcpError] = useState<string | null>(null);
@@ -122,13 +123,14 @@ export function TopBar({ tabs, activeTab, onTabChange, onNewTab, onCloseTab, con
           onClick={(e) => {
             e.stopPropagation();
             if (canDisconnect) setMenuOpen(v => !v);
+            else if (onOpenConnection) onOpenConnection();
           }}
-          disabled={!canDisconnect}
-          title={canDisconnect ? 'Connection menu' : undefined}
+          disabled={!canDisconnect && !onOpenConnection}
+          title={canDisconnect ? 'Connection menu' : onOpenConnection ? 'Connect to database' : undefined}
           style={{
             display: 'flex', alignItems: 'center', gap: 7, padding: '0 14px',
             height: '100%', background: menuOpen ? t.bgSurface : 'transparent',
-            border: 'none', cursor: canDisconnect ? 'pointer' : 'default',
+            border: 'none', cursor: (canDisconnect || onOpenConnection) ? 'pointer' : 'default',
             alignSelf: 'stretch',
           }}
         >

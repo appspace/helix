@@ -44,6 +44,7 @@ export default function App() {
   }, [themeName]);
 
   const [connected, setConnected] = useState(false);
+  const [showConnectionModal, setShowConnectionModal] = useState(true);
   const [isConnecting, setIsConnecting] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [connectionName, setConnectionName] = useState('Not connected');
@@ -102,6 +103,7 @@ export default function App() {
       setSchemas(list);
       setActiveSchema(initial);
       setConnected(true);
+      setShowConnectionModal(false);
 
       // Persist non-secret fields so the user doesn't retype them next time.
       if (friendly) {
@@ -125,6 +127,7 @@ export default function App() {
   const handleDisconnect = async () => {
     try { await api.disconnect(); } catch { /* ignore */ }
     setConnected(false);
+    setShowConnectionModal(true);
     setConnectionName('Not connected');
     setConnectionHost(null);
     setHistory([]);
@@ -344,6 +347,7 @@ export default function App() {
         connectionHost={connectionHost}
         connectionStatus={connected ? 'connected' : 'disconnected'}
         onDisconnect={handleDisconnect}
+        onOpenConnection={connected ? undefined : () => setShowConnectionModal(true)}
         mcpWritesAllowed={mcpWritesAllowed}
         mcpUrl={mcpUrl}
         onToggleMcpWrites={handleToggleMcpWrites}
@@ -401,11 +405,12 @@ export default function App() {
         </div>
       </div>
 
-      {!connected && (
+      {!connected && showConnectionModal && (
         <ConnectionManager
           onConnect={handleConnect}
           isConnecting={isConnecting}
           error={connectionError}
+          onDismiss={() => setShowConnectionModal(false)}
           t={t}
         />
       )}
