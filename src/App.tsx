@@ -23,9 +23,25 @@ const EMPTY_SCHEMA: SchemaData = { tables: [], views: [], procedures: [], trigge
 
 let tabCounter = 1;
 
+const THEME_KEY = 'helix.theme';
+
+function readStoredTheme(): ThemeName {
+  try {
+    const v = localStorage.getItem(THEME_KEY);
+    return v === 'light' || v === 'dark' ? v : 'dark';
+  } catch {
+    return 'dark';
+  }
+}
+
 export default function App() {
-  const [themeName, setThemeName] = useState<ThemeName>('dark');
+  const [themeName, setThemeName] = useState<ThemeName>(readStoredTheme);
   const t = themeName === 'dark' ? DARK : LIGHT;
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', themeName);
+    try { localStorage.setItem(THEME_KEY, themeName); } catch { /* quota or disabled storage */ }
+  }, [themeName]);
 
   const [connected, setConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
@@ -283,9 +299,7 @@ export default function App() {
   };
 
   const toggleTheme = () => {
-    const next: ThemeName = themeName === 'dark' ? 'light' : 'dark';
-    setThemeName(next);
-    document.documentElement.setAttribute('data-theme', next);
+    setThemeName(themeName === 'dark' ? 'light' : 'dark');
   };
 
   // Reload schema when switching schemas from the dropdown
