@@ -64,9 +64,9 @@ export default function App() {
   }, []);
 
   const handleSchemaChange = useCallback((schema: string) => {
+    // Schema fetch is driven by the useEffect on activeSchema; only update state here.
     setActiveSchema(schema);
-    loadSchema(schema);
-  }, [loadSchema]);
+  }, []);
 
   const handleConnect = async (form: ConnectionForm) => {
     setIsConnecting(true);
@@ -77,7 +77,6 @@ export default function App() {
       const initial = form.database && list.includes(form.database)
         ? form.database
         : list[0] ?? '';
-      if (initial) await loadSchema(initial);
 
       const friendly = form.name.trim();
       setConnectionName(friendly || res.connectionName);
