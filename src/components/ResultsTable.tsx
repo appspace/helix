@@ -313,7 +313,7 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
   const cellStyle = (val: string | number | null): CSSProperties => {
     if (val === null) return { ...s.td, color: t.textMuted, fontStyle: 'italic' };
     if (typeof val === 'number') return { ...s.td, color: t.sqlNumber };
-    if (typeof val === 'string' && /^\d{4}-\d{2}-\d{2}/.test(val)) return { ...s.td, color: t.sqlString };
+    if (typeof val === 'string' && /^\d{4}-\d{2}-\d{2}/.test(val)) return { ...s.td, color: t.colorInfo };
     return s.td;
   };
 

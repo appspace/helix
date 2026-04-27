@@ -7,6 +7,10 @@ import type { SavedQuery } from '../savedQueries';
 
 const LARGE_ROW_THRESHOLD = 5_000;
 
+const isMac = /Mac|iPhone|iPod|iPad/i.test(navigator.platform);
+const RUN_SHORTCUT = isMac ? '⌘↵' : 'Ctrl+Enter';
+const FORMAT_SHORTCUT = isMac ? '⇧⌥F' : 'Shift+Alt+F';
+
 function detectLargeTable(sql: string, schemaData: SchemaData | undefined): { table: string; rows: number } | null {
   if (!schemaData || !sql.trim()) return null;
   if (!/\bSELECT\b/i.test(sql)) return null;
@@ -281,15 +285,15 @@ export function QueryEditor({
   return (
     <div style={s.root}>
       <div style={s.toolbar}>
-        <button style={{ ...s.runBtn, opacity: isRunning ? 0.85 : 1 }} onClick={onRun} data-tooltip={isRunning ? 'Stop query' : 'Run query (⌘↵)'}>
+        <button style={{ ...s.runBtn, opacity: isRunning ? 0.85 : 1 }} onClick={onRun} data-tooltip={isRunning ? 'Stop query' : `Run query (${RUN_SHORTCUT})`}>
           {isRunning
             ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="6" y="6" width="12" height="12"/></svg>
             : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>}
           {isRunning ? 'Stop' : 'Run'}
-          <span style={{ fontSize: 10, opacity: 0.65 }}>⌘↵</span>
+          <span style={{ fontSize: 10, opacity: 0.65 }}>{RUN_SHORTCUT}</span>
         </button>
         <div style={s.sep}/>
-        <ToolBtn title="Format SQL (⇧⌥F)" t={t} onClick={handleFormat}>
+        <ToolBtn title={`Format SQL (${FORMAT_SHORTCUT})`} t={t} onClick={handleFormat}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <line x1="21" y1="10" x2="7" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="21" y1="18" x2="7" y2="18"/>
           </svg>
