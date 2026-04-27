@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef, CSSProperties, MutableRefObject } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import type { CSSProperties, MutableRefObject } from 'react';
 import type { Theme } from '../theme';
 import type { ColumnMeta, SchemaData } from '../api';
 import { InsertRowDialog } from './InsertRowDialog';
@@ -7,10 +8,10 @@ import { rowsToCsv, rowsToJson, downloadBlob, sanitizeFilename } from '../export
 export interface QueryResults {
   columns: string[];
   columnMeta?: ColumnMeta[];
-  rows: Record<string, string | number | null>[];
+  rows: Record<string, string | number | boolean | null>[];
 }
 
-type Row = Record<string, string | number | null>;
+type Row = Record<string, string | number | boolean | null>;
 type CellValue = string | number | boolean | null;
 
 interface DeleteTarget {
@@ -310,7 +311,7 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
     else { setSortCol(col); setSortDir('asc'); }
   };
 
-  const cellStyle = (val: string | number | null): CSSProperties => {
+  const cellStyle = (val: string | number | boolean | null): CSSProperties => {
     if (val === null) return { ...s.td, color: t.textMuted, fontStyle: 'italic' };
     if (typeof val === 'number') return { ...s.td, color: t.sqlNumber };
     if (typeof val === 'string' && /^\d{4}-\d{2}-\d{2}/.test(val)) return { ...s.td, color: t.sqlString };

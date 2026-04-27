@@ -4,13 +4,52 @@
   "version": "0.0.0",
   "type": "module",
   "license": "AGPL-3.0-only",
+  "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
     "dev:server": "npm run dev --prefix server",
     "dev:all": "concurrently \"npm run dev\" \"npm run dev:server\"",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "electron:dev": "concurrently -k \"npm run dev\" \"npm run dev:server\" \"electron electron/main.cjs\"",
+    "electron:build:server": "esbuild server/src/index.ts --bundle --platform=node --format=cjs --outfile=electron/server.cjs",
+    "electron:build": "npm run build && npm run electron:build:server && electron-builder",
+    "electron:dist": "npm run electron:build"
+  },
+  "build": {
+    "appId": "ca.appspace.helix",
+    "productName": "Helix",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "electron/main.cjs",
+      "electron/server.cjs",
+      "build/**"
+    ],
+    "extraResources": [
+      {
+        "from": "dist",
+        "to": "dist"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon.icns"
+    },
+    "win": {
+      "icon": "build/icon.ico",
+      "target": "nsis"
+    },
+    "linux": {
+      "icon": "build/icon.png",
+      "target": "AppImage"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
   },
   "dependencies": {
     "concurrently": "^9.1.2",
@@ -24,6 +63,9 @@
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
+    "electron": "^41.3.0",
+    "electron-builder": "^26.8.1",
+    "esbuild": "^0.28.0",
     "eslint": "^9.39.4",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.2",

@@ -1,4 +1,5 @@
-import { useState, CSSProperties } from 'react';
+import { useState } from 'react';
+import type { CSSProperties } from 'react';
 import type { Theme } from '../theme';
 import { api } from '../api';
 import { listSavedConnections, deleteSavedConnection, type SavedConnection } from '../savedConnections';

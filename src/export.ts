@@ -1,11 +1,11 @@
-export type ExportRow = Record<string, string | number | null>;
+export type ExportRow = Record<string, string | number | boolean | null>;
 
 /**
  * RFC 4180-ish CSV formatting. Fields containing `"`, `,`, or any line-ending
  * character are wrapped in double quotes with internal quotes doubled. NULLs
  * become empty fields. Rows are separated by CRLF for Excel compatibility.
  */
-function csvField(value: string | number | null | undefined): string {
+function csvField(value: string | number | boolean | null | undefined): string {
   if (value === null || value === undefined) return '';
   const s = String(value);
   if (/[",\r\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
