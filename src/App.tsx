@@ -64,6 +64,7 @@ export default function App() {
   }, []);
 
   const handleSchemaChange = useCallback((schema: string) => {
+    // Schema fetch is driven by the useEffect on activeSchema; only update state here.
     setActiveSchema(schema);
   }, []);
 
