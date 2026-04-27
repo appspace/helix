@@ -48,6 +48,7 @@ app.delete('/mcp', mcpHandler);
 const staticPath = process.env['STATIC_PATH'];
 if (staticPath) {
   app.use(express.static(staticPath));
+  // SPA fallback — must stay LAST; any /api route added after this will be shadowed
   app.get('*', (_req, res) => res.sendFile(join(staticPath, 'index.html')));
 }
 

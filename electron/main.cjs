@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, Tray, Menu, nativeImage, utilityProcess } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, utilityProcess, dialog } = require('electron');
 const path = require('path');
 const http = require('http');
 
@@ -8,6 +8,7 @@ const isDev = !app.isPackaged;
 const PORT = 3001;
 const VITE_URL = 'http://localhost:5173';
 const APP_URL = `http://localhost:${PORT}`;
+const ERR_CONNECTION_REFUSED = -102;
 
 // 1×1 transparent PNG — tray fallback when no icon file is present
 const FALLBACK_PNG =
@@ -32,9 +33,15 @@ function startServer() {
   serverProc.stderr?.on('data', (d) => console.error('[server]', String(d).trim()));
 }
 
-function waitForServer() {
-  return new Promise((resolve) => {
+function waitForServer(maxAttempts = 50) {
+  return new Promise((resolve, reject) => {
+    let attempts = 0;
     const attempt = () => {
+      if (attempts >= maxAttempts) {
+        reject(new Error(`Server did not start after ${maxAttempts} attempts`));
+        return;
+      }
+      attempts++;
       http
         .get(`${APP_URL}/api/connect/status`, resolve)
         .on('error', () => setTimeout(attempt, 300));
@@ -70,7 +77,7 @@ function createWindow() {
 
   // Retry if Vite/Express dev servers haven't started yet
   win.webContents.on('did-fail-load', (_e, code) => {
-    if (isDev && code === -102) setTimeout(() => win?.loadURL(url), 1000);
+    if (isDev && code === ERR_CONNECTION_REFUSED) setTimeout(() => win?.loadURL(url), 1000);
   });
 
   win.on('close', (e) => {
@@ -116,7 +123,12 @@ function createTray() {
 app.whenReady().then(async () => {
   if (!isDev) {
     startServer();
-    await waitForServer();
+    const started = await waitForServer().catch((err) => {
+      dialog.showErrorBox('Helix failed to start', err.message);
+      app.quit();
+      return false;
+    });
+    if (started === false) return;
   }
   createWindow();
   createTray();
