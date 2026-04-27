@@ -158,7 +158,7 @@ export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t
                       if (e.key === 'ArrowDown') { e.preventDefault(); setHighlightIdx(i => Math.min(i + 1, filteredSaved.length - 1)); }
                       else if (e.key === 'ArrowUp') { e.preventDefault(); setHighlightIdx(i => Math.max(i - 1, 0)); }
                       else if (e.key === 'Enter' && highlightIdx >= 0) { e.preventDefault(); applySaved(filteredSaved[highlightIdx]); }
-                      else if (e.key === 'Escape') { e.preventDefault(); setSuggestOpen(false); }
+                      else if (e.key === 'Escape') { e.preventDefault(); e.nativeEvent.stopImmediatePropagation(); setSuggestOpen(false); }
                     }}
                     placeholder="My Database"
                   />

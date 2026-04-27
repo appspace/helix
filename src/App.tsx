@@ -335,6 +335,9 @@ export default function App() {
   const bodyStyle: CSSProperties = { display: 'flex', flex: 1, overflow: 'hidden' };
   const mainStyle: CSSProperties = { display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' };
 
+  const handleDismissModal = useCallback(() => setShowConnectionModal(false), []);
+  const handleOpenConnection = useCallback(() => setShowConnectionModal(true), []);
+
   return (
     <div style={appStyle}>
       <TopBar
@@ -347,7 +350,7 @@ export default function App() {
         connectionHost={connectionHost}
         connectionStatus={connected ? 'connected' : 'disconnected'}
         onDisconnect={handleDisconnect}
-        onOpenConnection={connected ? undefined : () => setShowConnectionModal(true)}
+        onOpenConnection={connected ? undefined : handleOpenConnection}
         mcpWritesAllowed={mcpWritesAllowed}
         mcpUrl={mcpUrl}
         onToggleMcpWrites={handleToggleMcpWrites}
@@ -410,7 +413,7 @@ export default function App() {
           onConnect={handleConnect}
           isConnecting={isConnecting}
           error={connectionError}
-          onDismiss={() => setShowConnectionModal(false)}
+          onDismiss={handleDismissModal}
           t={t}
         />
       )}
