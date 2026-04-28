@@ -125,6 +125,16 @@ body {
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
 
+/* Electron window drag region (no-op in browsers) */
+.titlebar-drag { -webkit-app-region: drag; app-region: drag; }
+.titlebar-drag button,
+.titlebar-drag input,
+.titlebar-drag [role="switch"],
+.titlebar-drag [data-no-drag] {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
 /* CSS tooltips via data-tooltip attribute */
 [data-tooltip] { position: relative; }
 [data-tooltip]::after {

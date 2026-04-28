@@ -6,6 +6,8 @@ const http = require('http');
 
 const isDev = !app.isPackaged;
 const PORT = 3001;
+
+app.setName('Helix');
 const VITE_URL = 'http://localhost:5173';
 const APP_URL = `http://localhost:${PORT}`;
 const ERR_CONNECTION_REFUSED = -102;
@@ -121,6 +123,11 @@ function createTray() {
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 
 app.whenReady().then(async () => {
+  if (process.platform === 'darwin' && app.dock) {
+    const dockIcon = loadIcon('icon.png');
+    if (!dockIcon.isEmpty()) app.dock.setIcon(dockIcon);
+  }
+
   if (!isDev) {
     startServer();
     const started = await waitForServer().catch((err) => {

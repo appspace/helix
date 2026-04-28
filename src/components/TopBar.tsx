@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import type { CSSProperties } from 'react';
 import type { Theme, ThemeName } from '../theme';
 
+const isMac = /Mac|iPhone|iPod|iPad/i.test(navigator.platform);
+
 interface Tab {
   id: string;
   name: string;
@@ -50,10 +52,12 @@ export function TopBar({ tabs, activeTab, onTabChange, onNewTab, onCloseTab, con
     height: 40, background: t.bgToolbar, borderBottom: `1px solid ${t.border}`,
     display: 'flex', alignItems: 'center', flexShrink: 0,
   };
-  const logoArea: CSSProperties = {
-    width: 48, display: 'flex', alignItems: 'center', justifyContent: 'center',
-    borderRight: `1px solid ${t.borderSubtle}`, alignSelf: 'stretch', flexShrink: 0,
-  };
+  const logoArea: CSSProperties = isMac
+    ? { width: 78, alignSelf: 'stretch', flexShrink: 0 }
+    : {
+        width: 48, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        borderRight: `1px solid ${t.borderSubtle}`, alignSelf: 'stretch', flexShrink: 0,
+      };
   const tabsWrap: CSSProperties = { display: 'flex', alignItems: 'stretch', flex: 1, overflow: 'hidden', alignSelf: 'stretch' };
   const tabBase: CSSProperties = {
     display: 'flex', alignItems: 'center', gap: 6, padding: '0 10px 0 12px',
@@ -66,20 +70,22 @@ export function TopBar({ tabs, activeTab, onTabChange, onNewTab, onCloseTab, con
   const statusColor = connectionStatus === 'connected' ? t.colorSuccess : connectionStatus === 'error' ? t.colorError : t.textMuted;
 
   return (
-    <div style={root}>
+    <div style={root} className="titlebar-drag">
       <div style={logoArea}>
-        <svg width="22" height="22" viewBox="0 0 40 40" fill="none">
-          <path d="M6 6 C6 6, 20 2, 20 20 C20 38, 6 34, 6 34" stroke={t.accent} strokeWidth="2.5" strokeLinecap="round"/>
-          <path d="M16 6 C16 6, 30 2, 30 20 C30 38, 16 34, 16 34" stroke={t.accent} strokeWidth="2.5" strokeLinecap="round" opacity="0.5"/>
-          <circle cx="6" cy="6" r="2.5" fill={t.accent}/>
-          <circle cx="20" cy="20" r="2.5" fill={t.accent}/>
-          <circle cx="6" cy="34" r="2.5" fill={t.accent}/>
-        </svg>
+        {!isMac && (
+          <svg width="22" height="22" viewBox="0 0 40 40" fill="none">
+            <path d="M6 6 C6 6, 20 2, 20 20 C20 38, 6 34, 6 34" stroke={t.accent} strokeWidth="2.5" strokeLinecap="round"/>
+            <path d="M16 6 C16 6, 30 2, 30 20 C30 38, 16 34, 16 34" stroke={t.accent} strokeWidth="2.5" strokeLinecap="round" opacity="0.5"/>
+            <circle cx="6" cy="6" r="2.5" fill={t.accent}/>
+            <circle cx="20" cy="20" r="2.5" fill={t.accent}/>
+            <circle cx="6" cy="34" r="2.5" fill={t.accent}/>
+          </svg>
+        )}
       </div>
 
       <div style={tabsWrap}>
         {tabs.map(tab => (
-          <div key={tab.id} style={activeTab === tab.id ? tabActive : tabBase} onClick={() => onTabChange(tab.id)}>
+          <div key={tab.id} data-no-drag style={activeTab === tab.id ? tabActive : tabBase} onClick={() => onTabChange(tab.id)}>
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={activeTab === tab.id ? t.accent : t.textMuted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>
             </svg>
@@ -146,6 +152,7 @@ export function TopBar({ tabs, activeTab, onTabChange, onNewTab, onCloseTab, con
 
         {menuOpen && (
           <div
+            data-no-drag
             onClick={(e) => e.stopPropagation()}
             style={{
               position: 'absolute', top: '100%', right: 8, marginTop: 4, zIndex: 100,
