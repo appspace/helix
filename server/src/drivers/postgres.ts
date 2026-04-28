@@ -104,63 +104,61 @@ export class PostgresDriver implements DbDriver {
   async getSchema(schema: string): Promise<SchemaInfo> {
     const client = await this.pool.connect();
     try {
-      // Run all 5 queries on one client to avoid saturating the pool
-      const [tablesRes, columnsRes, viewsRes, procsRes, triggersRes] = await Promise.all([
-        client.query<{ name: string; row_count: string }>(
-          `SELECT t.table_name AS name,
-                  COALESCE(s.n_live_tup, 0)::text AS row_count
-           FROM information_schema.tables t
-           LEFT JOIN pg_stat_user_tables s
-             ON s.schemaname = t.table_schema AND s.relname = t.table_name
-           WHERE t.table_schema = $1 AND t.table_type = 'BASE TABLE'
-           ORDER BY t.table_name`,
-          [schema],
-        ),
-        client.query<{
-          tbl: string; col: string; col_type: string; data_type: string;
-          is_pk: string; nullable: string; col_default: string | null; extra: string;
-        }>(
-          `SELECT c.table_name AS tbl,
-                  c.column_name AS col,
-                  c.udt_name AS col_type,
-                  c.data_type AS data_type,
-                  CASE WHEN pk.column_name IS NOT NULL THEN '1' ELSE '0' END AS is_pk,
-                  CASE WHEN c.is_nullable = 'YES' THEN '1' ELSE '0' END AS nullable,
-                  c.column_default AS col_default,
-                  CASE WHEN c.column_default LIKE 'nextval(%' OR c.is_identity = 'YES'
-                       THEN 'auto_increment' ELSE '' END AS extra
-           FROM information_schema.columns c
-           LEFT JOIN (
-             SELECT kcu.table_name, kcu.column_name, kcu.table_schema
-             FROM information_schema.key_column_usage kcu
-             JOIN information_schema.table_constraints tc
-               ON tc.constraint_name = kcu.constraint_name
-               AND tc.table_schema = kcu.table_schema
-               AND tc.table_name = kcu.table_name
-               AND tc.constraint_type = 'PRIMARY KEY'
-             WHERE kcu.table_schema = $1
-           ) pk ON pk.table_name = c.table_name AND pk.column_name = c.column_name
-           WHERE c.table_schema = $1
-           ORDER BY c.table_name, c.ordinal_position`,
-          [schema],
-        ),
-        client.query<{ name: string }>(
-          `SELECT table_name AS name FROM information_schema.views
-           WHERE table_schema = $1 ORDER BY table_name`,
-          [schema],
-        ),
-        client.query<{ name: string }>(
-          `SELECT routine_name AS name FROM information_schema.routines
-           WHERE routine_schema = $1 AND routine_type IN ('FUNCTION', 'PROCEDURE')
-           ORDER BY routine_name`,
-          [schema],
-        ),
-        client.query<{ name: string }>(
-          `SELECT DISTINCT trigger_name AS name FROM information_schema.triggers
-           WHERE event_object_schema = $1 ORDER BY trigger_name`,
-          [schema],
-        ),
-      ]);
+      // pg clients are single-connection — queries must be sequential, not concurrent
+      const tablesRes = await client.query<{ name: string; row_count: string }>(
+        `SELECT t.table_name AS name,
+                COALESCE(s.n_live_tup, 0)::text AS row_count
+         FROM information_schema.tables t
+         LEFT JOIN pg_stat_user_tables s
+           ON s.schemaname = t.table_schema AND s.relname = t.table_name
+         WHERE t.table_schema = $1 AND t.table_type = 'BASE TABLE'
+         ORDER BY t.table_name`,
+        [schema],
+      );
+      const columnsRes = await client.query<{
+        tbl: string; col: string; col_type: string; data_type: string;
+        is_pk: string; nullable: string; col_default: string | null; extra: string;
+      }>(
+        `SELECT c.table_name AS tbl,
+                c.column_name AS col,
+                c.udt_name AS col_type,
+                c.data_type AS data_type,
+                CASE WHEN pk.column_name IS NOT NULL THEN '1' ELSE '0' END AS is_pk,
+                CASE WHEN c.is_nullable = 'YES' THEN '1' ELSE '0' END AS nullable,
+                c.column_default AS col_default,
+                CASE WHEN c.column_default LIKE 'nextval(%' OR c.is_identity = 'YES'
+                     THEN 'auto_increment' ELSE '' END AS extra
+         FROM information_schema.columns c
+         LEFT JOIN (
+           SELECT kcu.table_name, kcu.column_name, kcu.table_schema
+           FROM information_schema.key_column_usage kcu
+           JOIN information_schema.table_constraints tc
+             ON tc.constraint_name = kcu.constraint_name
+             AND tc.table_schema = kcu.table_schema
+             AND tc.table_name = kcu.table_name
+             AND tc.constraint_type = 'PRIMARY KEY'
+           WHERE kcu.table_schema = $1
+         ) pk ON pk.table_name = c.table_name AND pk.column_name = c.column_name
+         WHERE c.table_schema = $1
+         ORDER BY c.table_name, c.ordinal_position`,
+        [schema],
+      );
+      const viewsRes = await client.query<{ name: string }>(
+        `SELECT table_name AS name FROM information_schema.views
+         WHERE table_schema = $1 ORDER BY table_name`,
+        [schema],
+      );
+      const procsRes = await client.query<{ name: string }>(
+        `SELECT routine_name AS name FROM information_schema.routines
+         WHERE routine_schema = $1 AND routine_type IN ('FUNCTION', 'PROCEDURE')
+         ORDER BY routine_name`,
+        [schema],
+      );
+      const triggersRes = await client.query<{ name: string }>(
+        `SELECT DISTINCT trigger_name AS name FROM information_schema.triggers
+         WHERE event_object_schema = $1 ORDER BY trigger_name`,
+        [schema],
+      );
 
       const colsByTable = new Map<string, ColumnInfo[]>();
       for (const col of columnsRes.rows) {
@@ -236,38 +234,36 @@ export class PostgresDriver implements DbDriver {
     // type === 'table' — reconstruct DDL from catalog tables
     const client = await this.pool.connect();
     try {
-      const [colsRes, pkRes, idxRes] = await Promise.all([
-        client.query<{
-          column_name: string; data_type: string; udt_name: string;
-          character_maximum_length: string | null; numeric_precision: string | null;
-          numeric_scale: string | null; is_nullable: string;
-          column_default: string | null; is_identity: string;
-        }>(
-          `SELECT column_name, data_type, udt_name,
-                  character_maximum_length::text, numeric_precision::text, numeric_scale::text,
-                  is_nullable, column_default, is_identity
-           FROM information_schema.columns
-           WHERE table_schema = $1 AND table_name = $2
-           ORDER BY ordinal_position`,
-          [schema, table],
-        ),
-        client.query<{ column_name: string }>(
-          `SELECT kcu.column_name
-           FROM information_schema.table_constraints tc
-           JOIN information_schema.key_column_usage kcu
-             ON kcu.constraint_name = tc.constraint_name
-             AND kcu.table_schema = tc.table_schema
-             AND kcu.table_name = tc.table_name
-           WHERE tc.table_schema = $1 AND tc.table_name = $2 AND tc.constraint_type = 'PRIMARY KEY'
-           ORDER BY kcu.ordinal_position`,
-          [schema, table],
-        ),
-        client.query<{ indexname: string; indexdef: string }>(
-          `SELECT indexname, indexdef FROM pg_indexes
-           WHERE schemaname = $1 AND tablename = $2`,
-          [schema, table],
-        ),
-      ]);
+      const colsRes = await client.query<{
+        column_name: string; data_type: string; udt_name: string;
+        character_maximum_length: string | null; numeric_precision: string | null;
+        numeric_scale: string | null; is_nullable: string;
+        column_default: string | null; is_identity: string;
+      }>(
+        `SELECT column_name, data_type, udt_name,
+                character_maximum_length::text, numeric_precision::text, numeric_scale::text,
+                is_nullable, column_default, is_identity
+         FROM information_schema.columns
+         WHERE table_schema = $1 AND table_name = $2
+         ORDER BY ordinal_position`,
+        [schema, table],
+      );
+      const pkRes = await client.query<{ column_name: string }>(
+        `SELECT kcu.column_name
+         FROM information_schema.table_constraints tc
+         JOIN information_schema.key_column_usage kcu
+           ON kcu.constraint_name = tc.constraint_name
+           AND kcu.table_schema = tc.table_schema
+           AND kcu.table_name = tc.table_name
+         WHERE tc.table_schema = $1 AND tc.table_name = $2 AND tc.constraint_type = 'PRIMARY KEY'
+         ORDER BY kcu.ordinal_position`,
+        [schema, table],
+      );
+      const idxRes = await client.query<{ indexname: string; indexdef: string }>(
+        `SELECT indexname, indexdef FROM pg_indexes
+         WHERE schemaname = $1 AND tablename = $2`,
+        [schema, table],
+      );
 
       if (colsRes.rows.length === 0) throw new Error(`No DDL returned for ${qualified}.`);
 
