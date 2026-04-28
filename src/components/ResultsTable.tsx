@@ -428,7 +428,7 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
             New row
           </button>
         )}
-        <div style={{ position: 'relative' }}>
+        <div style={{ position: 'relative', display: 'flex' }}>
           <button
             style={{ ...s.exportBtn, opacity: results ? 1 : 0.5, cursor: results ? 'pointer' : 'not-allowed' }}
             onClick={(e) => { e.stopPropagation(); if (results) setExportOpen(o => !o); }}
