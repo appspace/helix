@@ -49,7 +49,7 @@ export const postConnect: RequestHandler = async (req, res) => {
     user: string;
     password: string;
     database?: string;
-    ssl?: boolean;
+    ssl?: 'require' | 'verify-full';
   };
 
   if (!host || !user) {
@@ -78,7 +78,7 @@ export const postTestConnect: RequestHandler = async (req, res) => {
     user: string;
     password: string;
     database?: string;
-    ssl?: boolean;
+    ssl?: 'require' | 'verify-full';
   };
 
   if (!host || !user) {

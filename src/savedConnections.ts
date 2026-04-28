@@ -5,6 +5,7 @@ export interface SavedConnection {
   user: string;
   database: string;
   ssl: boolean;
+  sslVerify?: boolean;
 }
 
 const KEY = 'helix.connections';

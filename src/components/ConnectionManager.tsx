@@ -12,6 +12,7 @@ export interface ConnectionForm {
   password: string;
   database: string;
   ssl: boolean;
+  sslVerify: boolean;
 }
 
 interface ConnectionManagerProps {
@@ -25,13 +26,13 @@ interface ConnectionManagerProps {
 export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t }: ConnectionManagerProps) {
   const [saved, setSaved] = useState<SavedConnection[]>(() => listSavedConnections());
   const initialForm: ConnectionForm = saved[0]
-    ? { ...saved[0], password: '' }
+    ? { ...saved[0], password: '', sslVerify: saved[0].sslVerify ?? false }
     : {
         name: 'Local MySQL',
         host: import.meta.env['VITE_DEFAULT_HOST'] ?? 'localhost',
         port: import.meta.env['VITE_DEFAULT_PORT'] ?? '3306',
         user: import.meta.env['VITE_DEFAULT_USER'] ?? 'root',
-        password: '', database: '', ssl: false,
+        password: '', database: '', ssl: false, sslVerify: true,
       };
   const [form, setForm] = useState<ConnectionForm>(initialForm);
   // Track the saved entry currently reflected in the form, so we only auto-populate once per match.
@@ -281,16 +282,41 @@ export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t
               />
             </div>
 
-            <div style={s.toggleRow}>
-              <button
-                type="button"
-                style={{ width: 34, height: 20, borderRadius: 9999, border: 'none', cursor: 'pointer', position: 'relative', flexShrink: 0, transition: 'background 150ms ease', background: form.ssl ? t.accent : t.border }}
-                onClick={() => set('ssl', !form.ssl)}
-              >
-                <div style={{ position: 'absolute', width: 14, height: 14, background: 'white', borderRadius: '50%', top: 3, left: form.ssl ? 17 : 3, transition: 'left 150ms ease' }}/>
-              </button>
-              <span style={s.toggleLabel}>Use SSL / TLS</span>
-              {form.ssl && <span style={s.sslBadge}>Encrypted</span>}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={s.toggleRow}>
+                <button
+                  type="button"
+                  style={{ width: 34, height: 20, borderRadius: 9999, border: 'none', cursor: 'pointer', position: 'relative', flexShrink: 0, transition: 'background 150ms ease', background: form.ssl ? t.accent : t.border }}
+                  onClick={() => set('ssl', !form.ssl)}
+                >
+                  <div style={{ position: 'absolute', width: 14, height: 14, background: 'white', borderRadius: '50%', top: 3, left: form.ssl ? 17 : 3, transition: 'left 150ms ease' }}/>
+                </button>
+                <span style={s.toggleLabel}>Use SSL / TLS</span>
+                {form.ssl && <span style={s.sslBadge}>Encrypted</span>}
+              </div>
+
+              {form.ssl && (
+                <div style={{ paddingLeft: 44, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={form.sslVerify}
+                      onChange={e => set('sslVerify', e.target.checked)}
+                      style={{ width: 14, height: 14, cursor: 'pointer', accentColor: t.accent }}
+                    />
+                    <span style={{ fontSize: 12.5, color: t.textSecondary }}>Verify server certificate</span>
+                  </label>
+                  {!form.sslVerify && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: t.colorWarning }}>
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                        <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+                      </svg>
+                      Certificate not verified — server identity cannot be confirmed
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {error && (
