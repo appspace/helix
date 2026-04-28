@@ -87,6 +87,36 @@ function cellDisplayValue(val: string | number | boolean | null, meta: ColumnMet
   return String(val);
 }
 
+// Long values blow out column widths and force users to scroll. We truncate
+// the display text to fit the column's effective width; the full value is
+// still reachable via "Copy cell", the hover tooltip, or by entering edit mode.
+const DEFAULT_MAX_COL_WIDTH = 320; // px — implicit cap for un-resized columns
+const CELL_PADDING_X = 24; // 12px left + 12px right (matches s.td)
+const SEPARATOR = ' … ';
+
+let _charWidth: number | null = null;
+function monoCharWidth(): number {
+  if (_charWidth !== null) return _charWidth;
+  if (typeof document === 'undefined') return 7.2;
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return (_charWidth = 7.2);
+  ctx.font = '12px "JetBrains Mono", monospace';
+  _charWidth = ctx.measureText('M').width || 7.2;
+  return _charWidth;
+}
+
+function truncateMiddleToWidth(s: string, widthPx: number): string {
+  const available = Math.max(0, widthPx - CELL_PADDING_X);
+  const maxChars = Math.floor(available / monoCharWidth());
+  if (s.length <= maxChars) return s;
+  if (maxChars <= SEPARATOR.length + 2) return s.slice(0, Math.max(1, maxChars - 1)) + '…';
+  const remain = maxChars - SEPARATOR.length;
+  const head = Math.ceil(remain / 2);
+  const tail = remain - head;
+  return s.slice(0, head) + SEPARATOR + s.slice(-tail);
+}
+
 function copyToClipboard(text: string) {
   navigator.clipboard.writeText(text).catch(() => {
     const ta = document.createElement('textarea');
@@ -758,9 +788,12 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
                         setEditing({ row, col, draft, kind, nullable, saving: false, error: null });
                       }}
                       title={(() => {
+                        const full = cellDisplayValue(row[col] ?? null, meta, schemaData);
+                        const colW = colWidths[col] ?? DEFAULT_MAX_COL_WIDTH;
+                        const wasTruncated = full !== truncateMiddleToWidth(full, colW);
                         const comment = commentFor(schemaData, meta);
                         const hint = editable ? 'Double-click to edit' : meta?.pk ? 'Primary key — not editable' : undefined;
-                        return [comment, hint].filter(Boolean).join(' — ') || undefined;
+                        return [wasTruncated ? full : null, comment, hint].filter(Boolean).join(' — ') || undefined;
                       })()}
                     >
                       {isEditing ? (
@@ -815,7 +848,7 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
                           ? <em>NULL</em>
                           : isBoolColumn(schemaData, meta)
                             ? (row[col] === 1 || row[col] === true ? 'true' : 'false')
-                            : String(row[col])
+                            : truncateMiddleToWidth(String(row[col]), colWidths[col] ?? DEFAULT_MAX_COL_WIDTH)
                       )}
                     </td>
                   );
