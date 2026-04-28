@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, CSSProperties } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import type { CSSProperties } from 'react';
 import { format as formatSql } from 'sql-formatter';
 import type { Theme } from '../theme';
 import type { SchemaData } from '../api';

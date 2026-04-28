@@ -1,4 +1,5 @@
-import { useState, useEffect, useMemo, CSSProperties } from 'react';
+import { useState, useEffect, useMemo } from 'react';
+import type { CSSProperties } from 'react';
 import type { Theme } from '../theme';
 import type { SchemaColumn } from '../api';
 
@@ -21,9 +22,6 @@ function editKindForDataType(dataType: string): EditKind {
   }
 }
 
-function toDatetimeLocal(v: string): string {
-  return v.replace(' ', 'T').slice(0, 16);
-}
 function fromDatetimeLocal(v: string): string {
   return v.replace('T', ' ');
 }
