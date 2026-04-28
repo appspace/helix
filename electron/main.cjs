@@ -1,8 +1,9 @@
 'use strict';
 
-const { app, BrowserWindow, Tray, Menu, nativeImage, utilityProcess, dialog } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, utilityProcess, dialog, ipcMain, safeStorage } = require('electron');
 const path = require('path');
 const http = require('http');
+const fs = require('fs');
 
 const isDev = !app.isPackaged;
 const PORT = 3001;
@@ -52,6 +53,65 @@ function waitForServer(maxAttempts = 50) {
   });
 }
 
+// ── Saved passwords (encrypted via OS keychain) ───────────────────────────────
+
+function passwordsFile() {
+  return path.join(app.getPath('userData'), 'passwords.json');
+}
+
+let passwordsCache = null;
+function readPasswords() {
+  if (passwordsCache) return passwordsCache;
+  try {
+    passwordsCache = JSON.parse(fs.readFileSync(passwordsFile(), 'utf8'));
+  } catch {
+    passwordsCache = {};
+  }
+  return passwordsCache;
+}
+function writePasswords(obj) {
+  passwordsCache = obj;
+  try {
+    fs.writeFileSync(passwordsFile(), JSON.stringify(obj, null, 2), { mode: 0o600 });
+  } catch (err) {
+    console.error('[passwords] write failed:', err);
+  }
+}
+
+ipcMain.handle('passwords:available', () => {
+  try { return safeStorage.isEncryptionAvailable(); } catch { return false; }
+});
+
+ipcMain.handle('passwords:save', (_e, name, password) => {
+  if (typeof name !== 'string' || !name || typeof password !== 'string') return;
+  if (!safeStorage.isEncryptionAvailable()) throw new Error('Encryption not available on this system');
+  const all = readPasswords();
+  all[name] = safeStorage.encryptString(password).toString('base64');
+  writePasswords(all);
+});
+
+ipcMain.handle('passwords:load', (_e, name) => {
+  if (typeof name !== 'string' || !name) return null;
+  const all = readPasswords();
+  const b64 = all[name];
+  if (!b64) return null;
+  try {
+    return safeStorage.decryptString(Buffer.from(b64, 'base64'));
+  } catch (err) {
+    console.error('[passwords] decrypt failed for', name, err);
+    return null;
+  }
+});
+
+ipcMain.handle('passwords:delete', (_e, name) => {
+  if (typeof name !== 'string' || !name) return;
+  const all = readPasswords();
+  if (name in all) {
+    delete all[name];
+    writePasswords(all);
+  }
+});
+
 // ── Icons ─────────────────────────────────────────────────────────────────────
 
 function loadIcon(filename) {
@@ -70,7 +130,11 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     icon: loadIcon(iconFile),
-    webPreferences: { nodeIntegration: false, contextIsolation: true },
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, 'preload.cjs'),
+    },
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
   });
 
