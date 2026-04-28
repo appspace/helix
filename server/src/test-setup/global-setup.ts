@@ -15,46 +15,46 @@ async function waitForMySQL(): Promise<mysql.Connection> {
   const deadline = Date.now() + TIMEOUT_MS;
   let lastError: unknown;
   while (Date.now() < deadline) {
-    try {
-      const conn = await mysql.createConnection(config);
-      await conn.ping();
-      return conn;
-    } catch (err) {
-      lastError = err;
-      await new Promise(r => setTimeout(r, POLL_MS));
+    const conn = await mysql.createConnection(config).catch(() => null);
+    if (conn) {
+      try {
+        await conn.ping();
+        return conn;
+      } catch (err) {
+        lastError = err;
+        await conn.end();
+      }
     }
+    await new Promise(r => setTimeout(r, POLL_MS));
   }
   throw new Error(`MySQL not reachable after ${TIMEOUT_MS}ms: ${lastError}`);
 }
 
 export async function setup() {
   const conn = await waitForMySQL();
+  try {
+    await conn.query(`
+      DROP DATABASE IF EXISTS helix_test;
+      CREATE DATABASE helix_test;
+      USE helix_test;
 
-  await conn.query(`
-    DROP DATABASE IF EXISTS helix_test;
-    CREATE DATABASE helix_test;
-    USE helix_test;
-
-    CREATE TABLE users (
-      id   INT AUTO_INCREMENT PRIMARY KEY,
-      name VARCHAR(100) NOT NULL,
-      age  INT,
-      bio  TEXT
-    );
-
-    CREATE TABLE orders (
-      id         INT AUTO_INCREMENT PRIMARY KEY,
-      user_id    INT NOT NULL,
-      amount     DECIMAL(10,2) NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-  `);
-
-  await conn.end();
+      CREATE TABLE users (
+        id   INT AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(100) NOT NULL,
+        age  INT,
+        bio  TEXT
+      );
+    `);
+  } finally {
+    await conn.end();
+  }
 }
 
 export async function teardown() {
   const conn = await mysql.createConnection(config);
-  await conn.query('DROP DATABASE IF EXISTS helix_test');
-  await conn.end();
+  try {
+    await conn.query('DROP DATABASE IF EXISTS helix_test');
+  } finally {
+    await conn.end();
+  }
 }
