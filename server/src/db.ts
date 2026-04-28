@@ -8,7 +8,7 @@ interface ConnectionConfig {
   user: string;
   password: string;
   database?: string;
-  ssl?: boolean;
+  ssl?: 'require' | 'verify-full';
 }
 
 let pool: mysql.Pool | null = null;
@@ -27,7 +27,9 @@ export async function connect(config: ConnectionConfig): Promise<void> {
     user: config.user,
     password: config.password,
     database: config.database || undefined,
-    ssl: config.ssl ? { rejectUnauthorized: false } : undefined,
+    ssl: config.ssl === 'verify-full' ? { rejectUnauthorized: true }
+       : config.ssl === 'require'     ? { rejectUnauthorized: false }
+       : undefined,
     waitForConnections: true,
     connectionLimit: 5,
     connectTimeout: 10_000,
@@ -85,7 +87,9 @@ export async function testConnection(config: ConnectionConfig): Promise<void> {
     user: config.user,
     password: config.password,
     database: config.database || undefined,
-    ssl: config.ssl ? { rejectUnauthorized: false } : undefined,
+    ssl: config.ssl === 'verify-full' ? { rejectUnauthorized: true }
+       : config.ssl === 'require'     ? { rejectUnauthorized: false }
+       : undefined,
     connectTimeout: 10_000,
   });
   try {

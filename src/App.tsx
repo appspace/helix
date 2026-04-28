@@ -115,6 +115,7 @@ export default function App() {
           user: form.user,
           database: form.database,
           ssl: form.ssl,
+          sslVerify: form.sslVerify,
         });
       }
     } catch (err) {
