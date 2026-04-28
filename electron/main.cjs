@@ -82,8 +82,10 @@ ipcMain.handle('passwords:available', () => {
   try { return safeStorage.isEncryptionAvailable(); } catch { return false; }
 });
 
+// Known limitation: renaming a saved connection orphans the old keychain entry —
+// only the new name gets an entry; the old one is never removed.
 ipcMain.handle('passwords:save', (_e, name, password) => {
-  if (typeof name !== 'string' || !name || typeof password !== 'string') return;
+  if (typeof name !== 'string' || !name || typeof password !== 'string' || !password) return;
   if (!safeStorage.isEncryptionAvailable()) throw new Error('Encryption not available on this system');
   const all = readPasswords();
   all[name] = safeStorage.encryptString(password).toString('base64');

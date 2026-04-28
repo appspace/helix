@@ -60,9 +60,11 @@ export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t
     let cancelled = false;
     electronAPI.passwords.load(first.name).then(pw => {
       if (cancelled || pw === null) return;
-      setForm(p => p.name === first.name ? { ...p, password: pw } : p);
+      setForm(p => p.name === first.name && p.password === '' ? { ...p, password: pw } : p);
     }).catch(() => {});
     return () => { cancelled = true; };
+  // Intentional empty deps — we only want to load the password for the connection
+  // that was active when the modal opened, not on every re-render.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -98,7 +100,7 @@ export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t
     if (entry.savePassword && electronAPI) {
       electronAPI.passwords.load(entry.name).then(pw => {
         if (pw === null) return;
-        setForm(p => p.name === entry.name ? { ...p, password: pw } : p);
+        setForm(p => p.name === entry.name && p.password === '' ? { ...p, password: pw } : p);
       }).catch(() => {});
     }
   };
