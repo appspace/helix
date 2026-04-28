@@ -6,6 +6,8 @@ export interface SavedConnection {
   database: string;
   ssl: boolean;
   sslVerify?: boolean;
+  // Whether the password is stored in the OS keychain (Electron only).
+  savePassword?: boolean;
 }
 
 const KEY = 'helix.connections';

@@ -10,6 +10,7 @@ import { ConnectionManager, type ConnectionForm } from './components/ConnectionM
 import { api } from './api';
 import type { SchemaData } from './api';
 import { saveConnection } from './savedConnections';
+import { electronAPI } from './electronAPI';
 import { addHistoryEntry, listHistory, deleteHistoryEntry, clearHistory, type HistoryEntry } from './queryHistory';
 import { listSavedQueries, saveQuery, deleteSavedQuery, renameSavedQuery, type SavedQuery } from './savedQueries';
 
@@ -116,7 +117,17 @@ export default function App() {
           database: form.database,
           ssl: form.ssl,
           sslVerify: form.sslVerify,
+          savePassword: form.savePassword,
         });
+        if (electronAPI) {
+          if (form.savePassword && form.password) {
+            electronAPI.passwords.save(friendly, form.password).catch(err => {
+              console.error('Failed to save password:', err);
+            });
+          } else {
+            electronAPI.passwords.delete(friendly).catch(() => {});
+          }
+        }
       }
     } catch (err) {
       setConnectionError(err instanceof Error ? err.message : String(err));

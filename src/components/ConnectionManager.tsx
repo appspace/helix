@@ -3,6 +3,7 @@ import type { CSSProperties } from 'react';
 import type { Theme } from '../theme';
 import { api } from '../api';
 import { listSavedConnections, deleteSavedConnection, type SavedConnection } from '../savedConnections';
+import { electronAPI } from '../electronAPI';
 
 export interface ConnectionForm {
   name: string;
@@ -13,6 +14,9 @@ export interface ConnectionForm {
   database: string;
   ssl: boolean;
   sslVerify: boolean;
+  // Only meaningful in Electron — when true, the password is persisted via
+  // safeStorage and reloaded the next time this connection is opened.
+  savePassword: boolean;
 }
 
 interface ConnectionManagerProps {
@@ -26,13 +30,13 @@ interface ConnectionManagerProps {
 export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t }: ConnectionManagerProps) {
   const [saved, setSaved] = useState<SavedConnection[]>(() => listSavedConnections());
   const initialForm: ConnectionForm = saved[0]
-    ? { ...saved[0], password: '', sslVerify: saved[0].sslVerify ?? false }
+    ? { ...saved[0], password: '', sslVerify: saved[0].sslVerify ?? false, savePassword: saved[0].savePassword ?? false }
     : {
         name: 'Local MySQL',
         host: import.meta.env['VITE_DEFAULT_HOST'] ?? 'localhost',
         port: import.meta.env['VITE_DEFAULT_PORT'] ?? '3306',
         user: import.meta.env['VITE_DEFAULT_USER'] ?? 'root',
-        password: '', database: '', ssl: false, sslVerify: true,
+        password: '', database: '', ssl: false, sslVerify: true, savePassword: false,
       };
   const [form, setForm] = useState<ConnectionForm>(initialForm);
   // Track the saved entry currently reflected in the form, so we only auto-populate once per match.
@@ -41,6 +45,28 @@ export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t
   const [highlightIdx, setHighlightIdx] = useState(-1);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: true } | { ok: false; error: string } | null>(null);
+  const [canSavePassword, setCanSavePassword] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    electronAPI?.passwords.available().then(ok => { if (!cancelled) setCanSavePassword(ok); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  // If the initial saved entry has a stored password, load it on mount.
+  useEffect(() => {
+    const first = saved[0];
+    if (!first?.savePassword || !electronAPI) return;
+    let cancelled = false;
+    electronAPI.passwords.load(first.name).then(pw => {
+      if (cancelled || pw === null) return;
+      setForm(p => p.name === first.name && p.password === '' ? { ...p, password: pw } : p);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  // Intentional empty deps — we only want to load the password for the connection
+  // that was active when the modal opened, not on every re-render.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (!onDismiss || isConnecting) return;
@@ -68,9 +94,15 @@ export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t
   };
 
   const applySaved = (entry: SavedConnection) => {
-    setForm({ ...entry, password: '' });
+    setForm({ ...entry, password: '', sslVerify: entry.sslVerify ?? false, savePassword: entry.savePassword ?? false });
     setAppliedSaved(entry.name);
     setSuggestOpen(false);
+    if (entry.savePassword && electronAPI) {
+      electronAPI.passwords.load(entry.name).then(pw => {
+        if (pw === null) return;
+        setForm(p => p.name === entry.name && p.password === '' ? { ...p, password: pw } : p);
+      }).catch(() => {});
+    }
   };
 
   const onNameChange = (value: string) => {
@@ -81,6 +113,7 @@ export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t
 
   const removeSaved = (name: string) => {
     deleteSavedConnection(name);
+    electronAPI?.passwords.delete(name).catch(() => {});
     const next = listSavedConnections();
     setSaved(next);
     if (appliedSaved === name) setAppliedSaved('');
@@ -266,6 +299,19 @@ export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t
                 />
               </div>
             </div>
+
+            {canSavePassword && (
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginTop: -4 }}>
+                <input
+                  type="checkbox"
+                  checked={form.savePassword}
+                  onChange={e => set('savePassword', e.target.checked)}
+                  style={{ width: 14, height: 14, cursor: 'pointer', accentColor: t.accent }}
+                />
+                <span style={{ fontSize: 12.5, color: t.textSecondary }}>Save password</span>
+                <span style={{ fontSize: 11, color: t.textMuted }}>(encrypted via OS keychain)</span>
+              </label>
+            )}
 
             <div style={s.field}>
               <label style={s.label}>

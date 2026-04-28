@@ -25,6 +25,7 @@
     },
     "files": [
       "electron/main.cjs",
+      "electron/preload.cjs",
       "electron/server.cjs",
       "build/**"
     ],
