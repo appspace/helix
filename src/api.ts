@@ -40,7 +40,7 @@ export interface ColumnMeta {
 
 export interface DeleteRowWhere {
   column: string;
-  value: string | number | null;
+  value: string | number | boolean | null;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -110,7 +110,7 @@ export const api = {
     });
   },
 
-  insertRow(schema: string, table: string, values: Record<string, string | number | null>) {
+  insertRow(schema: string, table: string, values: Record<string, string | number | boolean | null>) {
     return request<{ affectedRows: number; insertId: number | null; sql: string }>('/api/insert-row', {
       method: 'POST',
       body: JSON.stringify({ schema, table, values }),

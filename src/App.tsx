@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, CSSProperties } from 'react';
+import { useState, useEffect, useCallback } from 'react';
+import type { CSSProperties } from 'react';
 import { DARK, LIGHT } from './theme';
 import type { ThemeName } from './theme';
 import { TopBar } from './components/TopBar';
@@ -152,7 +153,7 @@ export default function App() {
 
   const handleInsertRow = async (
     table: string,
-    values: Record<string, string | number | null>,
+    values: Record<string, string | number | boolean | null>,
   ) => {
     await api.insertRow(activeSchema, table, values);
     // Re-run the current query so the grid reflects the new row (if it matches WHERE/ORDER/LIMIT).
@@ -169,8 +170,8 @@ export default function App() {
   };
 
   const handleUpdateCell = async (
-    row: Record<string, string | number | null>,
-    target: { table: string; where: { column: string; value: string | number | null }[]; column: string; value: string | number | boolean | null },
+    row: Record<string, string | number | boolean | null>,
+    target: { table: string; where: { column: string; value: string | number | boolean | null }[]; column: string; value: string | number | boolean | null },
   ) => {
     await api.updateCell(activeSchema, target.table, target.where, target.column, target.value);
     setResults(prev => {
@@ -182,8 +183,8 @@ export default function App() {
   };
 
   const handleDeleteRow = async (
-    row: Record<string, string | number | null>,
-    target: { table: string; where: { column: string; value: string | number | null }[] },
+    row: Record<string, string | number | boolean | null>,
+    target: { table: string; where: { column: string; value: string | number | boolean | null }[] },
   ) => {
     const result = await api.deleteRow(activeSchema, target.table, target.where);
     if (result.affectedRows === 0) {

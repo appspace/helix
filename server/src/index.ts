@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import { join } from 'path';
 import { postConnect, deleteConnect, getStatus, postTestConnect } from './routes/connect.js';
 import { getSchemas, getSchema } from './routes/schema.js';
 import { postQuery } from './routes/query.js';
@@ -42,6 +43,14 @@ app.post('/api/mcp/writes', postMcpWrites);
 app.post('/mcp', mcpHandler);
 app.get('/mcp', mcpHandler);
 app.delete('/mcp', mcpHandler);
+
+// Serve the Vite frontend in Electron production builds
+const staticPath = process.env['STATIC_PATH'];
+if (staticPath) {
+  app.use(express.static(staticPath));
+  // SPA fallback — must stay LAST; any /api route added after this will be shadowed
+  app.get('*', (_req, res) => res.sendFile(join(staticPath, 'index.html')));
+}
 
 app.listen(PORT, () => {
   console.log(`Helix server running at http://localhost:${PORT}`);

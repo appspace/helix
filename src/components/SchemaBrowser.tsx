@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef, CSSProperties } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import type { CSSProperties } from 'react';
 import type { Theme } from '../theme';
 import type { ObjectType, SchemaData } from '../api';
 import { ShowSchemaDialog } from './ShowSchemaDialog';

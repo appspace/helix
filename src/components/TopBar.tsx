@@ -1,4 +1,5 @@
-import { CSSProperties, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
+import type { CSSProperties } from 'react';
 import type { Theme, ThemeName } from '../theme';
 
 interface Tab {
