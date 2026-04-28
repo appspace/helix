@@ -684,7 +684,6 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
                     title={hComment}
                     style={{
                       ...s.th,
-                      position: 'relative',
                       cursor: resizingCol ? 'col-resize' : 'grab',
                       overflow: 'hidden',
                       ...(w ? { width: w, minWidth: w } : { minWidth: 80 }),
