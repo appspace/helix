@@ -2,15 +2,18 @@ import type { RequestHandler } from 'express';
 import type { ConnectionConfig } from '../drivers/interface.js';
 import { connect, disconnect, isConnected, getActiveConfig, testConnection } from '../db.js';
 
-type DbType = 'mysql' | 'postgres';
+type DbType = 'mysql' | 'postgres' | 'mongodb';
 
 function defaultPort(type: DbType): number {
-  return type === 'postgres' ? 5432 : 3306;
+  if (type === 'postgres') return 5432;
+  if (type === 'mongodb') return 27017;
+  return 3306;
 }
 
 interface ConnectError {
   message?: string;
   code?: string;
+  codeName?: string;
   errno?: number;
   address?: string;
   port?: number;
@@ -19,7 +22,9 @@ interface ConnectError {
 
 function friendlyConnectError(err: unknown, host: string, port: number, type: DbType): string {
   const e = err as ConnectError;
-  const code = e?.code;
+  // MongoDB driver surfaces semantic codes via `codeName` (e.g. AuthenticationFailed)
+  // while `code` is numeric. Fall back to codeName so the byCode lookup still hits.
+  const code = e?.code ?? e?.codeName;
   const where = `${host}:${port}`;
 
   const byCode: Record<string, string> = {
@@ -45,6 +50,10 @@ function friendlyConnectError(err: unknown, host: string, port: number, type: Db
     '42501': `The user doesn't have permission to connect.`,
     '28000': `Authentication failed. Check the username and password.`,
     '08006': `Connection to the server failed.`,
+    // MongoDB error codes (codeName)
+    AuthenticationFailed: `Access denied. Check the username and password.`,
+    HostUnreachable:      `Host '${host}' is unreachable. Check your network, VPN, or firewall rules.`,
+    InvalidURI:           `The MongoDB connection string is invalid. Check the URI for typos.`,
   };
 
   const friendly = code && byCode[code];
@@ -53,7 +62,8 @@ function friendlyConnectError(err: unknown, host: string, port: number, type: Db
   if (raw && code) return `${raw} (${code})`;
   if (raw) return raw;
   if (code) return `(${code})`;
-  return `Unknown connection error connecting to ${type === 'postgres' ? 'PostgreSQL' : 'MySQL'}.`;
+  const label = type === 'postgres' ? 'PostgreSQL' : type === 'mongodb' ? 'MongoDB' : 'MySQL';
+  return `Unknown connection error connecting to ${label}.`;
 }
 
 export { friendlyConnectError };
@@ -66,22 +76,32 @@ type ConnectBody = {
   database?: string;
   ssl?: 'require' | 'verify-full';
   type?: unknown;
+  connectionString?: string;
 };
 
 function parseConnectBody(body: ConnectBody): { config: ConnectionConfig } | { error: string } {
-  const { host, port, user, password, database, ssl, type } = body;
+  const { host, port, user, password, database, ssl, type, connectionString } = body;
 
   if (!host || !user) {
     return { error: 'host and user are required.' };
   }
-  if (type !== undefined && type !== 'mysql' && type !== 'postgres') {
+  if (type !== undefined && type !== 'mysql' && type !== 'postgres' && type !== 'mongodb') {
     return { error: `Unsupported db type: ${String(type)}` };
   }
 
   const dbType: DbType = (type as DbType | undefined) ?? 'mysql';
   const effectivePort = Number(port) || defaultPort(dbType);
   return {
-    config: { host, port: effectivePort, user, password: password ?? '', database, ssl, type: dbType },
+    config: {
+      host,
+      port: effectivePort,
+      user,
+      password: password ?? '',
+      database,
+      ssl,
+      type: dbType,
+      ...(connectionString ? { connectionString } : {}),
+    },
   };
 }
 

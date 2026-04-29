@@ -5,7 +5,9 @@ export interface ConnectionConfig {
   password: string;
   database?: string;
   ssl?: 'require' | 'verify-full';
-  type: 'mysql' | 'postgres';
+  type: 'mysql' | 'postgres' | 'mongodb';
+  /** When set, drivers that support it (e.g. MongoDB) use this URI instead of building one from host/port/user/password. */
+  connectionString?: string;
 }
 
 export interface ColumnMeta {

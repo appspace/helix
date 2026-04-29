@@ -39,6 +39,7 @@ interface MqlRequest {
 const SYSTEM_DBS = new Set(['admin', 'local', 'config']);
 
 function buildMongoUri(config: ConnectionConfig): string {
+  if (config.connectionString) return config.connectionString;
   const user = config.user ?? '';
   const password = config.password ?? '';
   const auth =
