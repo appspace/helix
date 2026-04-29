@@ -7,6 +7,7 @@ import { electronAPI } from '../electronAPI';
 
 export interface ConnectionForm {
   name: string;
+  type: 'mysql' | 'postgres';
   host: string;
   port: string;
   user: string;
@@ -30,9 +31,10 @@ interface ConnectionManagerProps {
 export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t }: ConnectionManagerProps) {
   const [saved, setSaved] = useState<SavedConnection[]>(() => listSavedConnections());
   const initialForm: ConnectionForm = saved[0]
-    ? { ...saved[0], password: '', sslVerify: saved[0].sslVerify ?? false, savePassword: saved[0].savePassword ?? false }
+    ? { ...saved[0], type: saved[0].type ?? 'mysql', password: '', sslVerify: saved[0].sslVerify ?? false, savePassword: saved[0].savePassword ?? false }
     : {
         name: 'Local MySQL',
+        type: 'mysql',
         host: import.meta.env['VITE_DEFAULT_HOST'] ?? 'localhost',
         port: import.meta.env['VITE_DEFAULT_PORT'] ?? '3306',
         user: import.meta.env['VITE_DEFAULT_USER'] ?? 'root',
@@ -93,8 +95,19 @@ export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t
     setTestResult(null);
   };
 
+  const setDbType = (t: 'mysql' | 'postgres') => {
+    setForm(p => ({
+      ...p,
+      type: t,
+      port: p.port === '3306' || p.port === '5432' || p.port === ''
+        ? (t === 'mysql' ? '3306' : '5432')
+        : p.port,
+    }));
+    setTestResult(null);
+  };
+
   const applySaved = (entry: SavedConnection) => {
-    setForm({ ...entry, password: '', sslVerify: entry.sslVerify ?? false, savePassword: entry.savePassword ?? false });
+    setForm({ ...entry, type: entry.type ?? 'mysql', password: '', sslVerify: entry.sslVerify ?? false, savePassword: entry.savePassword ?? false });
     setAppliedSaved(entry.name);
     setSuggestOpen(false);
     if (entry.savePassword && electronAPI) {
@@ -160,7 +173,7 @@ export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t
           </svg>
           <div>
             <div style={s.title}>New connection</div>
-            <div style={s.subtitle}>Connect to a MySQL server</div>
+            <div style={s.subtitle}>Connect to a {form.type === 'postgres' ? 'PostgreSQL' : 'MySQL'} server</div>
           </div>
         </div>
 
@@ -169,6 +182,33 @@ export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t
           autoComplete="on"
         >
           <div style={s.body}>
+            <div style={s.field}>
+              <label style={s.label}>Database type</label>
+              <div style={{ display: 'flex', gap: 6 }}>
+                {(['mysql', 'postgres'] as const).map(dbType => {
+                  const active = form.type === dbType;
+                  return (
+                    <button
+                      key={dbType}
+                      type="button"
+                      onClick={() => setDbType(dbType)}
+                      style={{
+                        height: 30, padding: '0 14px',
+                        background: active ? t.accent : t.bgInput,
+                        border: `1px solid ${active ? t.accent : t.border}`,
+                        borderRadius: 5, fontSize: 12, fontWeight: active ? 600 : 400,
+                        color: active ? t.textInverse : t.textSecondary,
+                        cursor: 'pointer', fontFamily: '"IBM Plex Sans", sans-serif',
+                        transition: 'background 120ms, color 120ms, border-color 120ms',
+                      }}
+                    >
+                      {dbType === 'mysql' ? 'MySQL' : 'PostgreSQL'}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             <div style={s.field}>
               <label style={s.label}>
                 Connection name
@@ -269,7 +309,7 @@ export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t
                   autoComplete="off"
                   value={form.port}
                   onChange={e => set('port', e.target.value)}
-                  placeholder="3306"
+                  placeholder={form.type === 'postgres' ? '5432' : '3306'}
                 />
               </div>
             </div>
@@ -379,7 +419,7 @@ export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={t.colorSuccess} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <polyline points="20 6 9 17 4 12"/>
                 </svg>
-                <span>Connection successful — {form.user}@{form.host}:{form.port || 3306}</span>
+                <span>Connection successful — {form.user}@{form.host}:{form.port || (form.type === 'postgres' ? 5432 : 3306)}</span>
               </div>
             )}
             {testResult && !testResult.ok && (
