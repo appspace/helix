@@ -1,13 +1,21 @@
 import { resetMcpState } from './mcp-state.js';
 import { MysqlDriver } from './drivers/mysql.js';
 import { PostgresDriver } from './drivers/postgres.js';
+import { MongoDBDriver } from './drivers/mongodb.js';
 import type { DbDriver, ConnectionConfig } from './drivers/interface.js';
 
 let driver: DbDriver | null = null;
 let activeConfig: ConnectionConfig | null = null;
 
 function makeDriver(config: ConnectionConfig): DbDriver {
-  return config.type === 'postgres' ? new PostgresDriver(config) : new MysqlDriver(config);
+  switch (config.type) {
+    case 'postgres':
+      return new PostgresDriver(config);
+    case 'mongodb':
+      return new MongoDBDriver(config);
+    default:
+      return new MysqlDriver(config);
+  }
 }
 
 export async function connect(config: ConnectionConfig): Promise<void> {

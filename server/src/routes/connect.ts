@@ -2,15 +2,18 @@ import type { RequestHandler } from 'express';
 import type { ConnectionConfig } from '../drivers/interface.js';
 import { connect, disconnect, isConnected, getActiveConfig, testConnection } from '../db.js';
 
-type DbType = 'mysql' | 'postgres';
+type DbType = 'mysql' | 'postgres' | 'mongodb';
 
 function defaultPort(type: DbType): number {
-  return type === 'postgres' ? 5432 : 3306;
+  if (type === 'postgres') return 5432;
+  if (type === 'mongodb') return 27017;
+  return 3306;
 }
 
 interface ConnectError {
   message?: string;
   code?: string;
+  codeName?: string;
   errno?: number;
   address?: string;
   port?: number;
@@ -19,7 +22,10 @@ interface ConnectError {
 
 function friendlyConnectError(err: unknown, host: string, port: number, type: DbType): string {
   const e = err as ConnectError;
-  const code = e?.code;
+  // Prefer the semantic `codeName` (e.g. 'AuthenticationFailed') when the driver
+  // surfaces both: MongoDB's numeric `code` (18) isn't in `byCode` and would
+  // otherwise mask the semantic match.
+  const code = e?.codeName ?? e?.code;
   const where = `${host}:${port}`;
 
   const byCode: Record<string, string> = {
@@ -45,6 +51,11 @@ function friendlyConnectError(err: unknown, host: string, port: number, type: Db
     '42501': `The user doesn't have permission to connect.`,
     '28000': `Authentication failed. Check the username and password.`,
     '08006': `Connection to the server failed.`,
+    // MongoDB error codes (codeName). HostUnreachable / InvalidURI aren't
+    // listed: an unreachable host surfaces as MongoServerSelectionError wrapping
+    // ENOTFOUND/ECONNREFUSED/ETIMEDOUT (already mapped above), and a malformed
+    // URI throws MongoParseError synchronously with no codeName.
+    AuthenticationFailed: `Access denied. Check the username and password.`,
   };
 
   const friendly = code && byCode[code];
@@ -53,7 +64,8 @@ function friendlyConnectError(err: unknown, host: string, port: number, type: Db
   if (raw && code) return `${raw} (${code})`;
   if (raw) return raw;
   if (code) return `(${code})`;
-  return `Unknown connection error connecting to ${type === 'postgres' ? 'PostgreSQL' : 'MySQL'}.`;
+  const label = type === 'postgres' ? 'PostgreSQL' : type === 'mongodb' ? 'MongoDB' : 'MySQL';
+  return `Unknown connection error connecting to ${label}.`;
 }
 
 export { friendlyConnectError };
@@ -66,23 +78,65 @@ type ConnectBody = {
   database?: string;
   ssl?: 'require' | 'verify-full';
   type?: unknown;
+  connectionString?: string;
 };
 
 function parseConnectBody(body: ConnectBody): { config: ConnectionConfig } | { error: string } {
-  const { host, port, user, password, database, ssl, type } = body;
+  const { host, port, user, password, database, ssl, type, connectionString } = body;
 
-  if (!host || !user) {
-    return { error: 'host and user are required.' };
-  }
-  if (type !== undefined && type !== 'mysql' && type !== 'postgres') {
+  if (type !== undefined && type !== 'mysql' && type !== 'postgres' && type !== 'mongodb') {
     return { error: `Unsupported db type: ${String(type)}` };
+  }
+  if (connectionString && (user || password)) {
+    // Strict UX: the URI carries its own credentials; don't silently drop the
+    // form fields, and don't silently let them override what's in the URI.
+    return { error: 'Provide either connectionString or user/password, not both.' };
+  }
+  if (!connectionString && (!host || !user)) {
+    return { error: 'host and user are required.' };
   }
 
   const dbType: DbType = (type as DbType | undefined) ?? 'mysql';
   const effectivePort = Number(port) || defaultPort(dbType);
-  return {
-    config: { host, port: effectivePort, user, password: password ?? '', database, ssl, type: dbType },
+  const config: ConnectionConfig = {
+    host: host ?? '',
+    port: effectivePort,
+    user: user ?? '',
+    password: password ?? '',
+    database,
+    ssl,
+    type: dbType,
+    ...(connectionString ? { connectionString } : {}),
   };
+  return { config };
+}
+
+/**
+ * Derive a display label like `user@host:port`. When `connectionString` is set
+ * the host/port/user fields in `config` are ignored by the driver, so we parse
+ * the URI to avoid showing stale form values. Falls back to the URI scheme tag
+ * if the URI can't be parsed (e.g. `mongodb+srv://` in older Node URL impls).
+ */
+function connectionLabel(config: ConnectionConfig): string {
+  if (config.connectionString) {
+    try {
+      // URL doesn't natively understand mongodb+srv; rewrite the scheme so the
+      // parser populates host/username. Strip the password from display.
+      const isSrv = /^mongodb\+srv:\/\//.test(config.connectionString);
+      const normalized = config.connectionString.replace(/^mongodb\+srv:\/\//, 'mongodb://');
+      const url = new URL(normalized);
+      const user = decodeURIComponent(url.username);
+      const host = url.hostname || '<connectionString>';
+      const at = user ? `${user}@` : '';
+      // For SRV URIs the real port comes from DNS resolution, so we omit it.
+      // For plain URIs we only show a port if the URI carries one explicitly.
+      if (isSrv || !url.port) return `${at}${host}`;
+      return `${at}${host}:${url.port}`;
+    } catch {
+      return '<connectionString>';
+    }
+  }
+  return `${config.user}@${config.host}:${config.port}`;
 }
 
 export const postConnect: RequestHandler = async (req, res) => {
@@ -95,7 +149,7 @@ export const postConnect: RequestHandler = async (req, res) => {
 
   try {
     await connect(config);
-    res.json({ ok: true, connectionName: `${config.user}@${config.host}:${config.port}` });
+    res.json({ ok: true, connectionName: connectionLabel(config) });
   } catch (err) {
     res.status(400).json({ error: friendlyConnectError(err, config.host, config.port, config.type) });
   }
@@ -126,8 +180,6 @@ export const getStatus: RequestHandler = (_req, res) => {
   const config = getActiveConfig();
   res.json({
     connected: isConnected(),
-    connectionName: config
-      ? `${config.user}@${config.host}:${config.port}`
-      : null,
+    connectionName: config ? connectionLabel(config) : null,
   });
 };
