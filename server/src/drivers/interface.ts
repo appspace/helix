@@ -36,6 +36,8 @@ export interface ColumnInfo {
   default: string | null;
   autoIncrement: boolean;
   comment: string;
+  /** Set by document-store drivers when fields are inferred from a sample document. */
+  inferred?: boolean;
 }
 
 export interface TableInfo {
