@@ -78,8 +78,8 @@ export interface DbDriver {
   /** Targeted lookup for a single table — returns null if it doesn't exist. */
   getTable(schema: string, table: string): Promise<TableInfo | null>;
   getTableDdl(schema: string, table: string, type: 'table' | 'view' | 'procedure' | 'trigger'): Promise<string>;
-  /** Document-store equivalent of `getTableDdl`. Implemented by `mql`-mode drivers. */
-  getCollectionInfo?(schema: string, collection: string): Promise<CollectionInfo>;
+  /** Document-store equivalent of `getTableDdl`. Implemented by `mql`-mode drivers. Returns null when the collection doesn't exist. */
+  getCollectionInfo?(schema: string, collection: string): Promise<CollectionInfo | null>;
   /** Return a quoted, escaped identifier (e.g. `name` for MySQL, "name" for Postgres). */
   escapeIdent(s: string): string;
   /** " LIMIT N" for dialects that support it in DML; "" for those that don't (e.g. Postgres). */

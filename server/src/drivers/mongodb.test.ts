@@ -64,10 +64,22 @@ vi.mock('mongodb', () => ({
 }));
 
 import { MongoDBDriver } from './mongodb.js';
+import { MongoClient } from 'mongodb';
 
+// TODO(#108): ConnectionConfig.type needs 'mongodb'. Until that lands, MongoDB
+// fixtures here pass type: 'mysql' purely to satisfy the type system.
 function makeDriver(database?: string) {
   return new MongoDBDriver({
     host: 'h', port: 27017, user: 'u', password: 'p', database,
+    type: 'mysql',
+  });
+}
+
+function makeDriverConfig(overrides: Partial<{ user: string; password: string }>) {
+  return new MongoDBDriver({
+    host: 'h', port: 27017,
+    user: overrides.user as string,
+    password: overrides.password as string,
     type: 'mysql',
   });
 }
@@ -96,6 +108,38 @@ describe('MongoDBDriver – static surface', () => {
 
   it('rowLimitClause is empty (limits applied via cursor.limit, not SQL)', () => {
     expect(makeDriver().rowLimitClause(10)).toBe('');
+  });
+});
+
+describe('MongoDBDriver – URI construction', () => {
+  function uriFromLastCtor(): string {
+    const calls = (MongoClient as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    return calls[calls.length - 1][0] as string;
+  }
+
+  it('omits credentials when user and password are both empty', () => {
+    makeDriverConfig({ user: '', password: '' });
+    expect(uriFromLastCtor()).toBe('mongodb://h:27017/');
+  });
+
+  it('includes credentials when only the user is set', () => {
+    makeDriverConfig({ user: 'alice', password: '' });
+    expect(uriFromLastCtor()).toBe('mongodb://alice:@h:27017/');
+  });
+
+  it('includes credentials when only the password is set', () => {
+    makeDriverConfig({ user: '', password: 'secret' });
+    expect(uriFromLastCtor()).toBe('mongodb://:secret@h:27017/');
+  });
+
+  it('coerces undefined user/password to empty strings (not the literal "undefined")', () => {
+    makeDriverConfig({});
+    expect(uriFromLastCtor()).toBe('mongodb://h:27017/');
+  });
+
+  it('percent-encodes credentials with reserved characters', () => {
+    makeDriverConfig({ user: 'a@b', password: 'p:w/d' });
+    expect(uriFromLastCtor()).toBe('mongodb://a%40b:p%3Aw%2Fd@h:27017/');
   });
 });
 
@@ -185,6 +229,23 @@ describe('MongoDBDriver.query – find', () => {
     expect(r.columnMeta.find((c) => c.name === '_id')?.pk).toBe(true);
   });
 
+  it('serializes Date in UTC regardless of how the Date literal is constructed', async () => {
+    // Constructing from an offset-bearing literal (not a "Z" UTC literal) and
+    // from millis-since-epoch — both must render identically in UTC.
+    const fromOffset = new Date('2024-01-02T03:04:05+05:00'); // 22:04:05Z prev day
+    const fromMillis = new Date(Date.UTC(2024, 0, 1, 22, 4, 5));
+    mockCursor.toArray.mockResolvedValueOnce([
+      { a: fromOffset, b: fromMillis },
+    ]);
+    const r = await makeDriver().query(
+      JSON.stringify({ collection: 'users', operation: 'find' }),
+    );
+    expect(r.rows[0]).toEqual({
+      a: '2024-01-01 22:04:05',
+      b: '2024-01-01 22:04:05',
+    });
+  });
+
   it('applies projection / sort / skip / limit when provided', async () => {
     mockCursor.toArray.mockResolvedValueOnce([]);
     await makeDriver().query(
@@ -265,7 +326,7 @@ describe('MongoDBDriver.query – writes', () => {
   });
 
   it('updateOne uses ObjectId filter when id is a 24-char hex string', async () => {
-    mockCollection.updateOne.mockResolvedValueOnce({ modifiedCount: 1 });
+    mockCollection.updateOne.mockResolvedValueOnce({ matchedCount: 1, modifiedCount: 1 });
     await makeDriver().query(
       JSON.stringify({
         collection: 'users',
@@ -280,8 +341,40 @@ describe('MongoDBDriver.query – writes', () => {
     expect(call[1]).toEqual({ $set: { name: 'New' } });
   });
 
+  it('updateOne reports affectedRows from matchedCount (no-op update still counts as matched)', async () => {
+    mockCollection.updateOne.mockResolvedValueOnce({ matchedCount: 1, modifiedCount: 0 });
+    const r = await makeDriver().query(
+      JSON.stringify({
+        collection: 'users',
+        operation: 'updateOne',
+        filter: { _id: 1 },
+        update: { $set: { name: 'same' } },
+      }),
+    );
+    expect(r.affectedRows).toBe(1);
+  });
+
+  it('updateOne retries with raw string id when ObjectId match returns 0 rows', async () => {
+    mockCollection.updateOne
+      .mockResolvedValueOnce({ matchedCount: 0, modifiedCount: 0 })
+      .mockResolvedValueOnce({ matchedCount: 1, modifiedCount: 1 });
+    const r = await makeDriver().query(
+      JSON.stringify({
+        collection: 'users',
+        operation: 'updateOne',
+        id: 'aaaaaaaaaaaaaaaaaaaaaaaa',
+        update: { $set: { name: 'X' } },
+      }),
+    );
+    expect(mockCollection.updateOne).toHaveBeenCalledTimes(2);
+    expect(mockCollection.updateOne.mock.calls[1][0]).toEqual({
+      _id: 'aaaaaaaaaaaaaaaaaaaaaaaa',
+    });
+    expect(r.affectedRows).toBe(1);
+  });
+
   it('updateOne falls back to raw filter when id is not provided', async () => {
-    mockCollection.updateOne.mockResolvedValueOnce({ modifiedCount: 0 });
+    mockCollection.updateOne.mockResolvedValueOnce({ matchedCount: 0, modifiedCount: 0 });
     await makeDriver().query(
       JSON.stringify({
         collection: 'users',
@@ -433,16 +526,24 @@ describe('MongoDBDriver – getCollectionInfo', () => {
       { v: 2, key: { email: 1 }, name: 'email_1', unique: true },
     ]);
     const r = await makeDriver().getCollectionInfo('shop', 'users');
-    expect(r.validator).toEqual({ $jsonSchema: { bsonType: 'object' } });
-    expect(r.indexes).toHaveLength(2);
+    expect(r?.validator).toEqual({ $jsonSchema: { bsonType: 'object' } });
+    expect(r?.indexes).toHaveLength(2);
   });
 
   it('returns null validator when none is set', async () => {
     mockListCursor.toArray.mockResolvedValueOnce([{ name: 'users', type: 'collection', options: {} }]);
     mockCollection.indexes.mockResolvedValueOnce([]);
     const r = await makeDriver().getCollectionInfo('shop', 'users');
-    expect(r.validator).toBeNull();
-    expect(r.indexes).toEqual([]);
+    expect(r?.validator).toBeNull();
+    expect(r?.indexes).toEqual([]);
+  });
+
+  it('returns null when the collection does not exist (mirrors getTable)', async () => {
+    mockListCursor.toArray.mockResolvedValueOnce([]);
+    const r = await makeDriver().getCollectionInfo('shop', 'ghost');
+    expect(r).toBeNull();
+    // Must not query indexes on a missing collection (avoids NamespaceNotFound).
+    expect(mockCollection.indexes).not.toHaveBeenCalled();
   });
 });
 

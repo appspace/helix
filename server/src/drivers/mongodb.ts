@@ -39,9 +39,11 @@ interface MqlRequest {
 const SYSTEM_DBS = new Set(['admin', 'local', 'config']);
 
 function buildMongoUri(config: ConnectionConfig): string {
+  const user = config.user ?? '';
+  const password = config.password ?? '';
   const auth =
-    config.user || config.password
-      ? `${encodeURIComponent(config.user)}:${encodeURIComponent(config.password)}@`
+    user || password
+      ? `${encodeURIComponent(user)}:${encodeURIComponent(password)}@`
       : '';
   return `mongodb://${auth}${config.host}:${config.port}/`;
 }
@@ -50,6 +52,9 @@ function serializeValue(val: unknown): unknown {
   if (val === null || val === undefined) return null;
   if (val instanceof ObjectId) return val.toHexString();
   if (val instanceof Date) {
+    // toISOString is always UTC, so the rendered string is timezone-stable
+    // regardless of process TZ. We deliberately drop the trailing "Z" / millis
+    // to match the SQL drivers' DATETIME-style output.
     return val.toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '');
   }
   if (Buffer.isBuffer(val)) return val.toString('hex');
@@ -84,11 +89,21 @@ function inferDataType(val: unknown): string {
   return t;
 }
 
+// TODO(#107 follow-up): drive _id coercion from column metadata once routes
+// pass it. Today we treat any 24-hex string as an ObjectId, which has
+// false-positive risk for app-generated ids that happen to match the shape;
+// callers compensate by retrying with the raw string when an ObjectId match
+// affects 0 rows (see coerceIdFilterFallback).
 function coerceIdFilter(id: unknown): Document {
   if (typeof id === 'string' && /^[a-f0-9]{24}$/i.test(id)) {
     return { _id: new ObjectId(id) };
   }
   return { _id: id } as Document;
+}
+
+/** True when coerceIdFilter promoted a string id to an ObjectId. */
+function idWasCoercedToObjectId(id: unknown): boolean {
+  return typeof id === 'string' && /^[a-f0-9]{24}$/i.test(id);
 }
 
 function parseRequest(sql: string): MqlRequest {
@@ -223,20 +238,31 @@ export class MongoDBDriver implements DbDriver {
       }
       case 'updateOne': {
         if (!req.update) throw new Error('updateOne requires an "update" field.');
-        const filter =
-          req.id !== undefined ? coerceIdFilter(req.id) : (req.filter ?? {});
-        const result = await coll.updateOne(filter, req.update);
+        const useId = req.id !== undefined;
+        const filter = useId ? coerceIdFilter(req.id) : (req.filter ?? {});
+        let result = await coll.updateOne(filter, req.update);
+        // Graceful fallback: if we promoted a 24-hex string to ObjectId and
+        // matched nothing, retry with the raw string id.
+        if (useId && result.matchedCount === 0 && idWasCoercedToObjectId(req.id)) {
+          result = await coll.updateOne({ _id: req.id } as Document, req.update);
+        }
+        // Use matchedCount, not modifiedCount: routes treat affectedRows === 0
+        // as "row not found" (404). A no-op update (matched but unchanged) must
+        // not be reported as missing.
         return {
           rows: [],
           columnMeta: [],
-          affectedRows: result.modifiedCount,
+          affectedRows: result.matchedCount,
           insertId: null,
         };
       }
       case 'deleteOne': {
-        const filter =
-          req.id !== undefined ? coerceIdFilter(req.id) : (req.filter ?? {});
-        const result = await coll.deleteOne(filter);
+        const useId = req.id !== undefined;
+        const filter = useId ? coerceIdFilter(req.id) : (req.filter ?? {});
+        let result = await coll.deleteOne(filter);
+        if (useId && result.deletedCount === 0 && idWasCoercedToObjectId(req.id)) {
+          result = await coll.deleteOne({ _id: req.id } as Document);
+        }
         return {
           rows: [],
           columnMeta: [],
@@ -270,7 +296,7 @@ export class MongoDBDriver implements DbDriver {
 
   async getSchemas(): Promise<string[]> {
     await this.ensureConnected();
-    const result = await this.client.db('admin').admin().listDatabases();
+    const result = await this.client.db().admin().listDatabases();
     return result.databases
       .map((d) => d.name)
       .filter((n) => !SYSTEM_DBS.has(n))
@@ -284,6 +310,9 @@ export class MongoDBDriver implements DbDriver {
     const baseCollections = collections.filter((c) => c.type !== 'view');
     const views = collections.filter((c) => c.type === 'view').map((c) => c.name);
 
+    // Best-effort field inference: we sample a single document and mark every
+    // column inferred:true. Fields that appear only on later documents are
+    // invisible to this pass. Tracked in #118 (union-of-keys sampling).
     const tables: TableInfo[] = await Promise.all(
       baseCollections.map(async (c) => {
         const coll = db.collection(c.name);
@@ -356,14 +385,13 @@ export class MongoDBDriver implements DbDriver {
     throw new Error('MongoDB driver does not produce SQL DDL; use getCollectionInfo instead.');
   }
 
-  async getCollectionInfo(schema: string, collection: string): Promise<CollectionInfo> {
+  async getCollectionInfo(schema: string, collection: string): Promise<CollectionInfo | null> {
     await this.ensureConnected();
     const db = this.db(schema);
     const list = await db.listCollections({ name: collection }, { nameOnly: false }).toArray();
-    const validator = (() => {
-      const opts = list[0]?.options as { validator?: Record<string, unknown> } | undefined;
-      return opts?.validator ?? null;
-    })();
+    if (list.length === 0) return null;
+    const opts = list[0]?.options as { validator?: Record<string, unknown> } | undefined;
+    const validator = opts?.validator ?? null;
     const indexes = (await db.collection(collection).indexes()) as Record<string, unknown>[];
     return { validator, indexes };
   }
