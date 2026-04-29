@@ -108,7 +108,7 @@ export const api = {
   },
 
   updateCell(schema: string, table: string, where: DeleteRowWhere[], column: string, value: string | number | boolean | null) {
-    return request<{ affectedRows: number; changedRows: number; sql: string }>('/api/update-cell', {
+    return request<{ affectedRows: number; sql: string }>('/api/update-cell', {
       method: 'POST',
       body: JSON.stringify({ schema, table, where, column, value }),
     });

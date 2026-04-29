@@ -1,5 +1,5 @@
 import pg from 'pg';
-import type { DbDriver, ConnectionConfig, QueryResult, ColumnMeta, ColumnInfo, SchemaInfo } from './interface.js';
+import type { DbDriver, ConnectionConfig, QueryResult, ColumnMeta, ColumnInfo, SchemaInfo, TableInfo } from './interface.js';
 
 export class PostgresDriver implements DbDriver {
   private pool: pg.Pool;
@@ -42,12 +42,15 @@ export class PostgresDriver implements DbDriver {
 
   async query(sql: string, params?: unknown[], schema?: string): Promise<QueryResult> {
     const client = await this.pool.connect();
+    let searchPathSet = false;
     try {
       if (schema) {
         await client.query(`SET search_path TO ${this.escapeIdent(schema)}`);
+        searchPathSet = true;
       }
 
-      // Convert MySQL-style ? placeholders to Postgres $N so DML routes stay uniform
+      // Naive ?→$N rewrite: assumes machine-generated SQL when params is non-empty.
+      // User-authored SQL must be passed without params (the rewrite is skipped then).
       let pgSql = sql;
       if (params?.length) {
         let n = 0;
@@ -96,6 +99,11 @@ export class PostgresDriver implements DbDriver {
 
       return { rows: serializedRows, columnMeta };
     } finally {
+      // pg.Pool reuses clients without resetting session state, so search_path
+      // would leak to the next caller on this same client.
+      if (searchPathSet) {
+        try { await client.query('SET search_path TO DEFAULT'); } catch { /* fall through to release */ }
+      }
       client.release();
     }
   }
@@ -196,6 +204,70 @@ export class PostgresDriver implements DbDriver {
         views: viewsRes.rows.map(v => v.name),
         procedures: procsRes.rows.map(p => p.name),
         triggers: triggersRes.rows.map(t => t.name),
+      };
+    } finally {
+      client.release();
+    }
+  }
+
+  async getTable(schema: string, table: string): Promise<TableInfo | null> {
+    const client = await this.pool.connect();
+    try {
+      const tableRes = await client.query<{ name: string; row_count: string }>(
+        `SELECT t.table_name AS name,
+                COALESCE(s.n_live_tup, 0)::text AS row_count
+         FROM information_schema.tables t
+         LEFT JOIN pg_stat_user_tables s
+           ON s.schemaname = t.table_schema AND s.relname = t.table_name
+         WHERE t.table_schema = $1 AND t.table_name = $2 AND t.table_type = 'BASE TABLE'`,
+        [schema, table],
+      );
+      if (tableRes.rows.length === 0) return null;
+
+      const colsRes = await client.query<{
+        col: string; col_type: string; data_type: string;
+        is_pk: string; nullable: string; col_default: string | null; extra: string;
+      }>(
+        `SELECT c.column_name AS col,
+                c.udt_name AS col_type,
+                c.data_type AS data_type,
+                CASE WHEN pk.column_name IS NOT NULL THEN '1' ELSE '0' END AS is_pk,
+                CASE WHEN c.is_nullable = 'YES' THEN '1' ELSE '0' END AS nullable,
+                c.column_default AS col_default,
+                CASE WHEN c.column_default LIKE 'nextval(%' OR c.is_identity = 'YES'
+                     THEN 'auto_increment' ELSE '' END AS extra
+         FROM information_schema.columns c
+         LEFT JOIN (
+           SELECT kcu.table_name, kcu.column_name, kcu.table_schema
+           FROM information_schema.key_column_usage kcu
+           JOIN information_schema.table_constraints tc
+             ON tc.constraint_name = kcu.constraint_name
+             AND tc.table_schema = kcu.table_schema
+             AND tc.table_name = kcu.table_name
+             AND tc.constraint_type = 'PRIMARY KEY'
+           WHERE kcu.table_schema = $1 AND kcu.table_name = $2
+         ) pk ON pk.column_name = c.column_name
+         WHERE c.table_schema = $1 AND c.table_name = $2
+         ORDER BY c.ordinal_position`,
+        [schema, table],
+      );
+
+      const cols: ColumnInfo[] = colsRes.rows.map(r => ({
+        name: r.col,
+        type: r.col_type,
+        dataType: (r.data_type ?? '').toLowerCase(),
+        pk: r.is_pk === '1',
+        nullable: r.nullable === '1',
+        default: r.col_default ?? null,
+        autoIncrement: r.extra.includes('auto_increment'),
+        comment: '',
+      }));
+
+      return {
+        name: tableRes.rows[0].name,
+        rows: Number(tableRes.rows[0].row_count),
+        comment: '',
+        columns: cols,
       };
     } finally {
       client.release();

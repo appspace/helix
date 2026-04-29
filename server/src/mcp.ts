@@ -96,8 +96,7 @@ export function buildMcpServer(): McpServer {
       if (err) return toolError(err);
 
       try {
-        const info = await getDriver().getSchema(schema);
-        const tableInfo = info.tables.find(t => t.name === table);
+        const tableInfo = await getDriver().getTable(schema, table);
         if (!tableInfo) {
           return toolError(`Table "${schema}"."${table}" not found.`);
         }

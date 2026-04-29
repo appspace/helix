@@ -58,31 +58,46 @@ function friendlyConnectError(err: unknown, host: string, port: number, type: Db
 
 export { friendlyConnectError };
 
-export const postConnect: RequestHandler = async (req, res) => {
-  const { host, port, user, password, database, ssl, type } = req.body as {
-    host: string;
-    port?: number;
-    user: string;
-    password: string;
-    database?: string;
-    ssl?: 'require' | 'verify-full';
-    type?: DbType;
-  };
+type ConnectBody = {
+  host?: string;
+  port?: number;
+  user?: string;
+  password?: string;
+  database?: string;
+  ssl?: 'require' | 'verify-full';
+  type?: unknown;
+};
+
+function parseConnectBody(body: ConnectBody): { config: ConnectionConfig } | { error: string } {
+  const { host, port, user, password, database, ssl, type } = body;
 
   if (!host || !user) {
-    res.status(400).json({ error: 'host and user are required.' });
-    return;
+    return { error: 'host and user are required.' };
+  }
+  if (type !== undefined && type !== 'mysql' && type !== 'postgres') {
+    return { error: `Unsupported db type: ${String(type)}` };
   }
 
-  const dbType: DbType = type === 'postgres' ? 'postgres' : 'mysql';
+  const dbType: DbType = (type as DbType | undefined) ?? 'mysql';
   const effectivePort = Number(port) || defaultPort(dbType);
-  const config: ConnectionConfig = { host, port: effectivePort, user, password, database, ssl, type: dbType };
+  return {
+    config: { host, port: effectivePort, user, password: password ?? '', database, ssl, type: dbType },
+  };
+}
+
+export const postConnect: RequestHandler = async (req, res) => {
+  const parsed = parseConnectBody(req.body as ConnectBody);
+  if ('error' in parsed) {
+    res.status(400).json({ error: parsed.error });
+    return;
+  }
+  const { config } = parsed;
 
   try {
     await connect(config);
-    res.json({ ok: true, connectionName: `${user}@${host}:${effectivePort}` });
+    res.json({ ok: true, connectionName: `${config.user}@${config.host}:${config.port}` });
   } catch (err) {
-    res.status(400).json({ error: friendlyConnectError(err, host, effectivePort, dbType) });
+    res.status(400).json({ error: friendlyConnectError(err, config.host, config.port, config.type) });
   }
 };
 
@@ -92,30 +107,18 @@ export const deleteConnect: RequestHandler = async (_req, res) => {
 };
 
 export const postTestConnect: RequestHandler = async (req, res) => {
-  const { host, port, user, password, database, ssl, type } = req.body as {
-    host: string;
-    port?: number;
-    user: string;
-    password: string;
-    database?: string;
-    ssl?: 'require' | 'verify-full';
-    type?: DbType;
-  };
-
-  if (!host || !user) {
-    res.status(400).json({ error: 'host and user are required.' });
+  const parsed = parseConnectBody(req.body as ConnectBody);
+  if ('error' in parsed) {
+    res.status(400).json({ error: parsed.error });
     return;
   }
-
-  const dbType: DbType = type === 'postgres' ? 'postgres' : 'mysql';
-  const effectivePort = Number(port) || defaultPort(dbType);
-  const config: ConnectionConfig = { host, port: effectivePort, user, password, database, ssl, type: dbType };
+  const { config } = parsed;
 
   try {
     await testConnection(config);
     res.json({ ok: true });
   } catch (err) {
-    res.status(400).json({ error: friendlyConnectError(err, host, effectivePort, dbType) });
+    res.status(400).json({ error: friendlyConnectError(err, config.host, config.port, config.type) });
   }
 };
 

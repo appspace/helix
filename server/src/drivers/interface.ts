@@ -57,6 +57,8 @@ export interface DbDriver {
   query(sql: string, params?: unknown[], schema?: string): Promise<QueryResult>;
   getSchemas(): Promise<string[]>;
   getSchema(schema: string): Promise<SchemaInfo>;
+  /** Targeted lookup for a single table — returns null if it doesn't exist. */
+  getTable(schema: string, table: string): Promise<TableInfo | null>;
   getTableDdl(schema: string, table: string, type: 'table' | 'view' | 'procedure' | 'trigger'): Promise<string>;
   /** Return a quoted, escaped identifier (e.g. `name` for MySQL, "name" for Postgres). */
   escapeIdent(s: string): string;
