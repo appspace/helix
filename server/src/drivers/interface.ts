@@ -52,7 +52,23 @@ export interface SchemaInfo {
   triggers: string[];
 }
 
+/**
+ * Collection-level metadata for document stores (MongoDB).
+ * Replaces `getTableDdl` for drivers in `mql` mode.
+ */
+export interface CollectionInfo {
+  /** JSON Schema validator if one is set on the collection; null otherwise. */
+  validator: Record<string, unknown> | null;
+  /** Indexes as returned by the underlying driver (e.g. `collection.indexes()`). */
+  indexes: Record<string, unknown>[];
+}
+
 export interface DbDriver {
+  /**
+   * Drivers in `sql` mode accept a SQL string + params; drivers in `mql` mode
+   * accept a MQL request object. Routes branch on this to validate the body shape.
+   */
+  readonly queryMode: 'sql' | 'mql';
   /** Run a query, optionally switching schema first (atomically on one connection). */
   query(sql: string, params?: unknown[], schema?: string): Promise<QueryResult>;
   getSchemas(): Promise<string[]>;
@@ -60,6 +76,8 @@ export interface DbDriver {
   /** Targeted lookup for a single table — returns null if it doesn't exist. */
   getTable(schema: string, table: string): Promise<TableInfo | null>;
   getTableDdl(schema: string, table: string, type: 'table' | 'view' | 'procedure' | 'trigger'): Promise<string>;
+  /** Document-store equivalent of `getTableDdl`. Implemented by `mql`-mode drivers. */
+  getCollectionInfo?(schema: string, collection: string): Promise<CollectionInfo>;
   /** Return a quoted, escaped identifier (e.g. `name` for MySQL, "name" for Postgres). */
   escapeIdent(s: string): string;
   /** " LIMIT N" for dialects that support it in DML; "" for those that don't (e.g. Postgres). */

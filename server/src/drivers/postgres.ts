@@ -2,6 +2,7 @@ import pg from 'pg';
 import type { DbDriver, ConnectionConfig, QueryResult, ColumnMeta, ColumnInfo, SchemaInfo, TableInfo } from './interface.js';
 
 export class PostgresDriver implements DbDriver {
+  readonly queryMode = 'sql' as const;
   private pool: pg.Pool;
 
   constructor(config: ConnectionConfig) {
