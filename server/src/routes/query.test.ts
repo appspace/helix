@@ -2,30 +2,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import request from 'supertest';
 import express from 'express';
 
-vi.mock('../db.js', () => {
-  const getPool = vi.fn();
-  return {
-    getPool,
-    // Mirror the real withSchema behaviour so connection-pinning assertions still pass.
-    withSchema: vi.fn(async (schema: string | undefined, fn: (conn: any) => Promise<any>) => {
-      const pool = getPool();
-      const conn = await pool.getConnection();
-      try {
-        if (schema) await conn.query(`USE \`${schema.replace(/`/g, '')}\``);
-        return await fn(conn);
-      } finally {
-        conn.release();
-      }
-    }),
-  };
-});
+vi.mock('../db.js', () => ({
+  getDriver: vi.fn(),
+}));
 
-import { getPool } from '../db.js';
+import { getDriver } from '../db.js';
 import { postQuery } from './query.js';
 
-// Minimal FieldPacket shape that postQuery reads from
-function makeField(name: string, flags = 0, columnType = 253) {
-  return { name, orgName: name, table: 't', orgTable: 't', flags, columnType, type: columnType };
+function makeMeta(name: string, { pk = false, unique = false, notNull = false } = {}) {
+  return { name, orgName: name, table: 't', orgTable: 't', pk, unique, notNull, mysqlType: 253 };
 }
 
 function makeApp() {
@@ -35,69 +20,73 @@ function makeApp() {
   return app;
 }
 
-describe('postQuery – connection pinning', () => {
+describe('postQuery – driver delegation', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('issues USE and SELECT on the same connection when schema is provided', async () => {
-    const mockConn = {
-      query: vi.fn()
-        .mockResolvedValueOnce([[], []])                          // USE `mydb`
-        .mockResolvedValueOnce([                                  // SELECT * FROM users
-          [{ id: 1, name: 'Alice' }],
-          [makeField('id', /* PRI_KEY */ 2), makeField('name')],
-        ]),
-      release: vi.fn(),
+  it('passes schema to driver.query() and returns rows + columnMeta', async () => {
+    const mockDriver = {
+      query: vi.fn().mockResolvedValue({
+        rows: [{ id: 1, name: 'Alice' }],
+        columnMeta: [makeMeta('id', { pk: true }), makeMeta('name')],
+      }),
     };
-    vi.mocked(getPool).mockReturnValue({ getConnection: vi.fn().mockResolvedValue(mockConn) } as any);
+    vi.mocked(getDriver).mockReturnValue(mockDriver as any);
 
     const res = await request(makeApp())
       .post('/api/query')
       .send({ sql: 'SELECT * FROM users', schema: 'mydb' });
 
     expect(res.status).toBe(200);
-
-    // Both calls landed on the same mock connection object — not on pool directly
-    expect(mockConn.query).toHaveBeenCalledTimes(2);
-    expect(mockConn.query).toHaveBeenNthCalledWith(1, 'USE `mydb`');
-    expect(mockConn.query).toHaveBeenNthCalledWith(2, 'SELECT * FROM users');
-
-    // Connection is always returned to the pool
-    expect(mockConn.release).toHaveBeenCalledTimes(1);
-
-    // Spot-check response shape
+    expect(mockDriver.query).toHaveBeenCalledWith('SELECT * FROM users', [], 'mydb');
     expect(res.body.columns).toEqual(['id', 'name']);
     expect(res.body.rows).toEqual([{ id: 1, name: 'Alice' }]);
     expect(res.body.columnMeta[0]).toMatchObject({ name: 'id', pk: true });
+    expect(res.body).toHaveProperty('executionTime');
   });
 
-  it('skips USE and runs the query directly when no schema is provided', async () => {
-    const mockConn = {
-      query: vi.fn().mockResolvedValueOnce([
-        [{ one: 1 }],
-        [makeField('one')],
-      ]),
-      release: vi.fn(),
+  it('passes undefined schema when no schema is provided', async () => {
+    const mockDriver = {
+      query: vi.fn().mockResolvedValue({
+        rows: [{ one: 1 }],
+        columnMeta: [makeMeta('one')],
+      }),
     };
-    vi.mocked(getPool).mockReturnValue({ getConnection: vi.fn().mockResolvedValue(mockConn) } as any);
+    vi.mocked(getDriver).mockReturnValue(mockDriver as any);
 
     const res = await request(makeApp())
       .post('/api/query')
       .send({ sql: 'SELECT 1 AS one' });
 
     expect(res.status).toBe(200);
-    expect(mockConn.query).toHaveBeenCalledTimes(1);
-    expect(mockConn.query).toHaveBeenCalledWith('SELECT 1 AS one');
-    expect(mockConn.release).toHaveBeenCalledTimes(1);
+    expect(mockDriver.query).toHaveBeenCalledWith('SELECT 1 AS one', [], undefined);
   });
 
-  it('releases the connection even when the query throws', async () => {
-    const mockConn = {
-      query: vi.fn()
-        .mockResolvedValueOnce([[], []])  // USE succeeds
-        .mockRejectedValueOnce(new Error("Table 'mydb.ghost' doesn't exist")),
-      release: vi.fn(),
+  it('returns affectedRows and insertId for DML (empty columnMeta)', async () => {
+    const mockDriver = {
+      query: vi.fn().mockResolvedValue({
+        rows: [],
+        columnMeta: [],
+        affectedRows: 3,
+        insertId: 0,
+      }),
     };
-    vi.mocked(getPool).mockReturnValue({ getConnection: vi.fn().mockResolvedValue(mockConn) } as any);
+    vi.mocked(getDriver).mockReturnValue(mockDriver as any);
+
+    const res = await request(makeApp())
+      .post('/api/query')
+      .send({ sql: "UPDATE users SET active = 0 WHERE role = 'guest'" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.columns).toEqual([]);
+    expect(res.body.rows).toEqual([]);
+    expect(res.body.affectedRows).toBe(3);
+  });
+
+  it('returns 400 when driver.query() throws', async () => {
+    const mockDriver = {
+      query: vi.fn().mockRejectedValue(new Error("Table 'mydb.ghost' doesn't exist")),
+    };
+    vi.mocked(getDriver).mockReturnValue(mockDriver as any);
 
     const res = await request(makeApp())
       .post('/api/query')
@@ -105,23 +94,6 @@ describe('postQuery – connection pinning', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('ghost');
-    expect(mockConn.release).toHaveBeenCalledTimes(1);
-  });
-
-  it('releases the connection even when USE throws', async () => {
-    const mockConn = {
-      query: vi.fn().mockRejectedValueOnce(new Error("Unknown database 'noexist'")),
-      release: vi.fn(),
-    };
-    vi.mocked(getPool).mockReturnValue({ getConnection: vi.fn().mockResolvedValue(mockConn) } as any);
-
-    const res = await request(makeApp())
-      .post('/api/query')
-      .send({ sql: 'SELECT 1', schema: 'noexist' });
-
-    expect(res.status).toBe(400);
-    expect(res.body.error).toContain('noexist');
-    expect(mockConn.release).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -141,89 +113,26 @@ describe('postQuery – input validation', () => {
   });
 });
 
-describe('postQuery – response serialization', () => {
+describe('postQuery – row serialization passthrough', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('serializes Buffer columns as hex strings', async () => {
-    const mockConn = {
-      query: vi.fn().mockResolvedValueOnce([
-        [{ hash: Buffer.from('deadbeef', 'hex') }],
-        [makeField('hash')],
-      ]),
-      release: vi.fn(),
+  it('passes driver-serialized rows straight through to the response', async () => {
+    const mockDriver = {
+      query: vi.fn().mockResolvedValue({
+        rows: [{ hash: 'deadbeef', created_at: '2024-06-15 12:34:56', big: '9007199254740993', val: null }],
+        columnMeta: [makeMeta('hash'), makeMeta('created_at'), makeMeta('big'), makeMeta('val')],
+      }),
     };
-    vi.mocked(getPool).mockReturnValue({ getConnection: vi.fn().mockResolvedValue(mockConn) } as any);
-
-    const res = await request(makeApp()).post('/api/query').send({ sql: 'SELECT hash FROM t' });
-
-    expect(res.status).toBe(200);
-    expect(res.body.rows[0].hash).toBe('deadbeef');
-  });
-
-  it('serializes Date columns as ISO-style strings without milliseconds', async () => {
-    const mockConn = {
-      query: vi.fn().mockResolvedValueOnce([
-        [{ created_at: new Date('2024-06-15T12:34:56.000Z') }],
-        [makeField('created_at')],
-      ]),
-      release: vi.fn(),
-    };
-    vi.mocked(getPool).mockReturnValue({ getConnection: vi.fn().mockResolvedValue(mockConn) } as any);
-
-    const res = await request(makeApp()).post('/api/query').send({ sql: 'SELECT created_at FROM t' });
-
-    expect(res.status).toBe(200);
-    expect(res.body.rows[0].created_at).toBe('2024-06-15 12:34:56');
-  });
-
-  it('serializes BigInt columns as strings', async () => {
-    const mockConn = {
-      query: vi.fn().mockResolvedValueOnce([
-        [{ big: BigInt('9007199254740993') }],
-        [makeField('big')],
-      ]),
-      release: vi.fn(),
-    };
-    vi.mocked(getPool).mockReturnValue({ getConnection: vi.fn().mockResolvedValue(mockConn) } as any);
-
-    const res = await request(makeApp()).post('/api/query').send({ sql: 'SELECT big FROM t' });
-
-    expect(res.status).toBe(200);
-    expect(res.body.rows[0].big).toBe('9007199254740993');
-  });
-
-  it('serializes NULL values as null', async () => {
-    const mockConn = {
-      query: vi.fn().mockResolvedValueOnce([
-        [{ val: null }],
-        [makeField('val')],
-      ]),
-      release: vi.fn(),
-    };
-    vi.mocked(getPool).mockReturnValue({ getConnection: vi.fn().mockResolvedValue(mockConn) } as any);
-
-    const res = await request(makeApp()).post('/api/query').send({ sql: 'SELECT NULL AS val' });
-
-    expect(res.status).toBe(200);
-    expect(res.body.rows[0].val).toBeNull();
-  });
-
-  it('returns affectedRows and insertId for non-SELECT statements', async () => {
-    const mockConn = {
-      // mysql2 returns a ResultSetHeader (plain object, not array) for DML
-      query: vi.fn().mockResolvedValueOnce([{ affectedRows: 3, insertId: 0 }]),
-      release: vi.fn(),
-    };
-    vi.mocked(getPool).mockReturnValue({ getConnection: vi.fn().mockResolvedValue(mockConn) } as any);
+    vi.mocked(getDriver).mockReturnValue(mockDriver as any);
 
     const res = await request(makeApp())
       .post('/api/query')
-      .send({ sql: "UPDATE users SET active = 0 WHERE role = 'guest'" });
+      .send({ sql: 'SELECT hash, created_at, big, val FROM t' });
 
     expect(res.status).toBe(200);
-    expect(res.body.columns).toEqual([]);
-    expect(res.body.rows).toEqual([]);
-    expect(res.body.affectedRows).toBe(3);
-    expect(mockConn.release).toHaveBeenCalledTimes(1);
+    expect(res.body.rows[0].hash).toBe('deadbeef');
+    expect(res.body.rows[0].created_at).toBe('2024-06-15 12:34:56');
+    expect(res.body.rows[0].big).toBe('9007199254740993');
+    expect(res.body.rows[0].val).toBeNull();
   });
 });

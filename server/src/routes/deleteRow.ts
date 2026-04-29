@@ -1,13 +1,10 @@
 import type { RequestHandler } from 'express';
-import type { ResultSetHeader } from 'mysql2/promise';
-import { getPool } from '../db.js';
+import { getDriver } from '../db.js';
 
 interface WhereClause {
   column: string;
   value: string | number | null;
 }
-
-const escapeIdent = (s: string) => '`' + s.replace(/`/g, '') + '`';
 
 export const postDeleteRow: RequestHandler = async (req, res) => {
   const { schema, table, where } = req.body as {
@@ -29,17 +26,17 @@ export const postDeleteRow: RequestHandler = async (req, res) => {
     return;
   }
 
+  const driver = getDriver();
   const qualifiedTable = schema
-    ? `${escapeIdent(schema)}.${escapeIdent(table)}`
-    : escapeIdent(table);
+    ? `${driver.escapeIdent(schema)}.${driver.escapeIdent(table)}`
+    : driver.escapeIdent(table);
 
-  const whereClause = where.map(w => `${escapeIdent(w.column)} = ?`).join(' AND ');
-  const sql = `DELETE FROM ${qualifiedTable} WHERE ${whereClause} LIMIT 1`;
+  const whereClause = where.map(w => `${driver.escapeIdent(w.column)} = ?`).join(' AND ');
+  const sql = `DELETE FROM ${qualifiedTable} WHERE ${whereClause}${driver.rowLimitClause(1)}`;
   const values = where.map(w => w.value);
 
   try {
-    const pool = getPool();
-    const [result] = await pool.query(sql, values) as [ResultSetHeader, unknown];
+    const result = await driver.query(sql, values);
     res.json({ affectedRows: result.affectedRows ?? 0, sql });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

@@ -1,8 +1,5 @@
 import type { RequestHandler } from 'express';
-import type { ResultSetHeader } from 'mysql2/promise';
-import { getPool } from '../db.js';
-
-const escapeIdent = (s: string) => '`' + s.replace(/`/g, '') + '`';
+import { getDriver } from '../db.js';
 
 export const postInsertRow: RequestHandler = async (req, res) => {
   const { schema, table, values } = req.body as {
@@ -20,19 +17,19 @@ export const postInsertRow: RequestHandler = async (req, res) => {
     return;
   }
 
+  const driver = getDriver();
   const cols = Object.keys(values);
   const qualifiedTable = schema
-    ? `${escapeIdent(schema)}.${escapeIdent(table)}`
-    : escapeIdent(table);
+    ? `${driver.escapeIdent(schema)}.${driver.escapeIdent(table)}`
+    : driver.escapeIdent(table);
 
-  const colList = cols.map(escapeIdent).join(', ');
+  const colList = cols.map(c => driver.escapeIdent(c)).join(', ');
   const placeholders = cols.map(() => '?').join(', ');
   const sql = `INSERT INTO ${qualifiedTable} (${colList}) VALUES (${placeholders})`;
   const params = cols.map(c => values[c]);
 
   try {
-    const pool = getPool();
-    const [result] = await pool.query(sql, params) as [ResultSetHeader, unknown];
+    const result = await driver.query(sql, params);
     res.json({
       affectedRows: result.affectedRows ?? 0,
       insertId: result.insertId ?? null,

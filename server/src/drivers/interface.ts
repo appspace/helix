@@ -60,6 +60,8 @@ export interface DbDriver {
   getTableDdl(schema: string, table: string, type: 'table' | 'view' | 'procedure' | 'trigger'): Promise<string>;
   /** Return a quoted, escaped identifier (e.g. `name` for MySQL, "name" for Postgres). */
   escapeIdent(s: string): string;
+  /** " LIMIT N" for dialects that support it in DML; "" for those that don't (e.g. Postgres). */
+  rowLimitClause(n: number): string;
   ping(): Promise<void>;
   end(): Promise<void>;
 }

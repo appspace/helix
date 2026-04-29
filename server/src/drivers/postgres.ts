@@ -23,6 +23,10 @@ export class PostgresDriver implements DbDriver {
     return '"' + s.replace(/"/g, '') + '"';
   }
 
+  rowLimitClause(_n: number): string {
+    return '';
+  }
+
   async ping(): Promise<void> {
     const client = await this.pool.connect();
     try {
@@ -43,7 +47,13 @@ export class PostgresDriver implements DbDriver {
         await client.query(`SET search_path TO ${this.escapeIdent(schema)}`);
       }
 
-      const result = await client.query({ text: sql, values: params?.length ? params : undefined });
+      // Convert MySQL-style ? placeholders to Postgres $N so DML routes stay uniform
+      let pgSql = sql;
+      if (params?.length) {
+        let n = 0;
+        pgSql = sql.replace(/\?/g, () => `$${++n}`);
+      }
+      const result = await client.query({ text: pgSql, values: params?.length ? params : undefined });
 
       // Non-SELECT (INSERT, UPDATE, DELETE, DDL, etc.)
       if (!result.fields || result.fields.length === 0) {

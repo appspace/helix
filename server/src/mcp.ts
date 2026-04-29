@@ -1,18 +1,15 @@
 import type { RequestHandler } from 'express';
-import type { RowDataPacket, FieldPacket } from 'mysql2/promise';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
-import { getPool, getActiveConfig, isConnected, withSchema } from './db.js';
+import { getDriver, getActiveConfig, isConnected } from './db.js';
 import { isMcpWritesAllowed } from './mcp-state.js';
 
 const DEFAULT_ROW_LIMIT = 100;
 const MAX_ROW_LIMIT = 10_000;
 
-// Matches the leading keyword of a statement, skipping whitespace and /* */ comments.
 const READ_KEYWORDS = new Set(['SELECT', 'SHOW', 'DESCRIBE', 'DESC', 'EXPLAIN', 'WITH']);
 const WRITE_KEYWORDS = new Set(['INSERT', 'UPDATE', 'DELETE', 'REPLACE']);
-// Everything else (CREATE, DROP, ALTER, TRUNCATE, RENAME, GRANT, REVOKE, SET, CALL, ...) is blocked in v1.
 
 function firstKeyword(sql: string): string {
   const stripped = sql.replace(/\/\*[\s\S]*?\*\//g, '').replace(/--.*$/gm, '').trimStart();
@@ -20,33 +17,12 @@ function firstKeyword(sql: string): string {
   return match ? match[1].toUpperCase() : '';
 }
 
-function serializeValue(val: unknown): unknown {
-  if (val === null || val === undefined) return null;
-  if (Buffer.isBuffer(val)) return val.toString('hex');
-  if (val instanceof Date) return val.toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '');
-  if (typeof val === 'bigint') return val.toString();
-  return val;
-}
-
-function serializeRows(rows: RowDataPacket[], columns: string[]): Record<string, unknown>[] {
-  return rows.map(row => {
-    const out: Record<string, unknown> = {};
-    for (const col of columns) out[col] = serializeValue(row[col]);
-    return out;
-  });
-}
-
 function toolError(message: string) {
-  return {
-    isError: true,
-    content: [{ type: 'text' as const, text: message }],
-  };
+  return { isError: true, content: [{ type: 'text' as const, text: message }] };
 }
 
 function toolJson(value: unknown) {
-  return {
-    content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }],
-  };
+  return { content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }] };
 }
 
 function requireConnection(): string | null {
@@ -83,33 +59,22 @@ export function buildMcpServer(): McpServer {
       if (err) return toolError(err);
 
       try {
-        const pool = getPool();
+        const driver = getDriver();
 
         if (!schema) {
-          const [rows] = await pool.query<RowDataPacket[]>(
-            `SELECT SCHEMA_NAME AS name FROM information_schema.SCHEMATA
-             WHERE SCHEMA_NAME NOT IN ('information_schema','performance_schema','mysql','sys')
-             ORDER BY SCHEMA_NAME`,
-          );
-          return toolJson({ schemas: rows.map(r => r['name']) });
+          const schemas = await driver.getSchemas();
+          return toolJson({ schemas });
         }
 
-        const [tables] = await pool.query<RowDataPacket[]>(
-          `SELECT TABLE_NAME AS name, TABLE_ROWS AS approx_rows, TABLE_COMMENT AS comment
-           FROM information_schema.TABLES
-           WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE'
-           ORDER BY TABLE_NAME`,
-          [schema],
-        );
-        const [views] = await pool.query<RowDataPacket[]>(
-          `SELECT TABLE_NAME AS name FROM information_schema.VIEWS
-           WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME`,
-          [schema],
-        );
+        const info = await driver.getSchema(schema);
         return toolJson({
           schema,
-          tables: tables.map(t => ({ name: t['name'], approxRows: t['approx_rows'], comment: t['comment'] ?? '' })),
-          views: views.map(v => v['name']),
+          tables: info.tables.map(t => ({
+            name: t.name,
+            approxRows: t.rows,
+            comment: t.comment,
+          })),
+          views: info.views,
         });
       } catch (e) {
         return toolError(e instanceof Error ? e.message : String(e));
@@ -131,36 +96,12 @@ export function buildMcpServer(): McpServer {
       if (err) return toolError(err);
 
       try {
-        const pool = getPool();
-        const [columns] = await pool.query<RowDataPacket[]>(
-          `SELECT COLUMN_NAME AS name, COLUMN_TYPE AS type, DATA_TYPE AS dataType,
-                  IF(COLUMN_KEY = 'PRI', 1, 0) AS isPk,
-                  IF(IS_NULLABLE = 'YES', 1, 0) AS nullable,
-                  COLUMN_DEFAULT AS columnDefault,
-                  EXTRA AS extra,
-                  COLUMN_COMMENT AS comment
-           FROM information_schema.COLUMNS
-           WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
-           ORDER BY ORDINAL_POSITION`,
-          [schema, table],
-        );
-        if (columns.length === 0) {
-          return toolError(`Table \`${schema}\`.\`${table}\` not found.`);
+        const info = await getDriver().getSchema(schema);
+        const tableInfo = info.tables.find(t => t.name === table);
+        if (!tableInfo) {
+          return toolError(`Table "${schema}"."${table}" not found.`);
         }
-        return toolJson({
-          schema,
-          table,
-          columns: columns.map(c => ({
-            name: c['name'],
-            type: c['type'],
-            dataType: c['dataType'],
-            pk: Boolean(c['isPk']),
-            nullable: Boolean(c['nullable']),
-            default: c['columnDefault'],
-            autoIncrement: String(c['extra'] ?? '').toLowerCase().includes('auto_increment'),
-            comment: c['comment'] ?? '',
-          })),
-        });
+        return toolJson({ schema, table, columns: tableInfo.columns });
       } catch (e) {
         return toolError(e instanceof Error ? e.message : String(e));
       }
@@ -175,9 +116,9 @@ export function buildMcpServer(): McpServer {
         `Results are capped at ${DEFAULT_ROW_LIMIT} rows by default; pass "limit" (up to ${MAX_ROW_LIMIT}) to change.`,
       inputSchema: {
         sql: z.string().min(1).describe('Read-only SQL statement.'),
-        schema: z.string().optional().describe('Schema to USE before the query.'),
+        schema: z.string().optional().describe('Schema to switch to before the query.'),
         limit: z.number().int().positive().max(MAX_ROW_LIMIT).optional()
-          .describe(`Max rows returned to the caller (default ${DEFAULT_ROW_LIMIT}, max ${MAX_ROW_LIMIT}).`),
+          .describe(`Max rows returned (default ${DEFAULT_ROW_LIMIT}, max ${MAX_ROW_LIMIT}).`),
       },
     },
     async ({ sql, schema, limit }) => {
@@ -194,27 +135,21 @@ export function buildMcpServer(): McpServer {
 
       const cap = limit ?? DEFAULT_ROW_LIMIT;
       try {
-        return await withSchema(schema, async (conn) => {
-          const start = Date.now();
-          const [rows, fields]: [RowDataPacket[], FieldPacket[]] = await conn.query(sql) as [RowDataPacket[], FieldPacket[]];
-          const executionTime = Date.now() - start;
+        const start = Date.now();
+        const result = await getDriver().query(sql, [], schema);
+        const executionTime = Date.now() - start;
 
-          if (!Array.isArray(rows)) {
-            return toolJson({ columns: [], rows: [], executionTime });
-          }
-
-          const columns = fields.map(f => f.name);
-          const totalRows = rows.length;
-          const capped = rows.slice(0, cap);
-          return toolJson({
-            columns,
-            rows: serializeRows(capped, columns),
-            rowCount: capped.length,
-            totalRows,
-            truncated: totalRows > capped.length,
-            limitApplied: cap,
-            executionTime,
-          });
+        const columns = result.columnMeta.map(c => c.name);
+        const totalRows = result.rows.length;
+        const capped = result.rows.slice(0, cap);
+        return toolJson({
+          columns,
+          rows: capped,
+          rowCount: capped.length,
+          totalRows,
+          truncated: totalRows > capped.length,
+          limitApplied: cap,
+          executionTime,
         });
       } catch (e) {
         return toolError(e instanceof Error ? e.message : String(e));
@@ -231,7 +166,7 @@ export function buildMcpServer(): McpServer {
         'DDL (CREATE/DROP/ALTER/TRUNCATE) is not supported.',
       inputSchema: {
         sql: z.string().min(1).describe('INSERT / UPDATE / DELETE / REPLACE statement.'),
-        schema: z.string().optional().describe('Schema to USE before the statement.'),
+        schema: z.string().optional().describe('Schema to switch to before the statement.'),
       },
     },
     async ({ sql, schema }) => {
@@ -255,16 +190,13 @@ export function buildMcpServer(): McpServer {
       }
 
       try {
-        return await withSchema(schema, async (conn) => {
-          const start = Date.now();
-          const [result] = await conn.query(sql) as unknown as [{ affectedRows?: number; insertId?: number; changedRows?: number }];
-          const executionTime = Date.now() - start;
-          return toolJson({
-            affectedRows: result.affectedRows ?? 0,
-            changedRows: result.changedRows ?? 0,
-            insertId: result.insertId ?? null,
-            executionTime,
-          });
+        const start = Date.now();
+        const result = await getDriver().query(sql, [], schema);
+        const executionTime = Date.now() - start;
+        return toolJson({
+          affectedRows: result.affectedRows ?? 0,
+          insertId: result.insertId ?? null,
+          executionTime,
         });
       } catch (e) {
         return toolError(e instanceof Error ? e.message : String(e));

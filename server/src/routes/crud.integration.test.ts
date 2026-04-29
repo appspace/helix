@@ -13,6 +13,7 @@ const DB_CONFIG = {
   port: Number(process.env['MYSQL_PORT'] ?? 3307),
   user: process.env['MYSQL_USER'] ?? 'root',
   password: process.env['MYSQL_PASSWORD'] ?? 'root',
+  type: 'mysql' as const,
 };
 
 function makeApp() {

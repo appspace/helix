@@ -25,6 +25,10 @@ export class MysqlDriver implements DbDriver {
     return '`' + s.replace(/`/g, '') + '`';
   }
 
+  rowLimitClause(n: number): string {
+    return ` LIMIT ${n}`;
+  }
+
   async ping(): Promise<void> {
     const conn = await this.pool.getConnection();
     try {
