@@ -1,7 +1,5 @@
 import type { RequestHandler } from 'express';
-import { getPool } from '../db.js';
-
-const escapeIdent = (s: string) => '`' + s.replace(/`/g, '') + '`';
+import { getDriver } from '../db.js';
 
 export const postDropTable: RequestHandler = async (req, res) => {
   const { schema, table } = req.body as { schema?: string; table?: string };
@@ -9,13 +7,15 @@ export const postDropTable: RequestHandler = async (req, res) => {
     res.status(400).json({ error: 'table is required.' });
     return;
   }
+
+  const driver = getDriver();
   const qualifiedTable = schema
-    ? `${escapeIdent(schema)}.${escapeIdent(table)}`
-    : escapeIdent(table);
+    ? `${driver.escapeIdent(schema)}.${driver.escapeIdent(table)}`
+    : driver.escapeIdent(table);
   const sql = `DROP TABLE ${qualifiedTable}`;
+
   try {
-    const pool = getPool();
-    await pool.query(sql);
+    await driver.query(sql);
     res.json({ ok: true, sql });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

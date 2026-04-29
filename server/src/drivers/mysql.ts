@@ -1,6 +1,6 @@
 import mysql from 'mysql2/promise';
 import type { RowDataPacket, FieldPacket, ResultSetHeader } from 'mysql2/promise';
-import type { DbDriver, ConnectionConfig, QueryResult, ColumnMeta, ColumnInfo, SchemaInfo } from './interface.js';
+import type { DbDriver, ConnectionConfig, QueryResult, ColumnMeta, ColumnInfo, SchemaInfo, TableInfo } from './interface.js';
 
 export class MysqlDriver implements DbDriver {
   private pool: mysql.Pool;
@@ -23,6 +23,10 @@ export class MysqlDriver implements DbDriver {
 
   escapeIdent(s: string): string {
     return '`' + s.replace(/`/g, '') + '`';
+  }
+
+  rowLimitClause(n: number): string {
+    return ` LIMIT ${n}`;
   }
 
   async ping(): Promise<void> {
@@ -186,6 +190,57 @@ export class MysqlDriver implements DbDriver {
         views: views.map(v => v['name'] as string),
         procedures: procedures.map(p => p['name'] as string),
         triggers: triggers.map(t => t['name'] as string),
+      };
+    } finally {
+      conn.release();
+    }
+  }
+
+  async getTable(schema: string, table: string): Promise<TableInfo | null> {
+    const conn = await this.pool.getConnection();
+    try {
+      const [[tables], [columns]] = await Promise.all([
+        conn.query<RowDataPacket[]>(
+          `SELECT TABLE_NAME AS name, TABLE_ROWS AS row_count, TABLE_COMMENT AS comment
+           FROM information_schema.TABLES
+           WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND TABLE_TYPE = 'BASE TABLE'`,
+          [schema, table],
+        ),
+        conn.query<RowDataPacket[]>(
+          `SELECT COLUMN_NAME AS col, COLUMN_TYPE AS col_type,
+                  DATA_TYPE AS data_type,
+                  IF(COLUMN_KEY = 'PRI', 1, 0) AS is_pk,
+                  IF(IS_NULLABLE = 'YES', 1, 0) AS nullable,
+                  COLUMN_DEFAULT AS col_default,
+                  EXTRA AS extra,
+                  COLUMN_COMMENT AS comment
+           FROM information_schema.COLUMNS
+           WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+           ORDER BY ORDINAL_POSITION`,
+          [schema, table],
+        ),
+      ]);
+
+      if (tables.length === 0) return null;
+      const t = tables[0];
+      const cols: ColumnInfo[] = columns.map(col => {
+        const extra = ((col['extra'] as string) ?? '').toLowerCase();
+        return {
+          name: col['col'] as string,
+          type: col['col_type'] as string,
+          dataType: ((col['data_type'] as string) ?? '').toLowerCase(),
+          pk: Boolean(col['is_pk']),
+          nullable: Boolean(col['nullable']),
+          default: (col['col_default'] as string | null) ?? null,
+          autoIncrement: extra.includes('auto_increment'),
+          comment: (col['comment'] as string) ?? '',
+        };
+      });
+      return {
+        name: t['name'] as string,
+        rows: t['row_count'] as number,
+        comment: (t['comment'] as string) ?? '',
+        columns: cols,
       };
     } finally {
       conn.release();

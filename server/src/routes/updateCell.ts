@@ -1,13 +1,10 @@
 import type { RequestHandler } from 'express';
-import type { ResultSetHeader } from 'mysql2/promise';
-import { getPool } from '../db.js';
+import { getDriver } from '../db.js';
 
 interface WhereClause {
   column: string;
   value: string | number | null;
 }
-
-const escapeIdent = (s: string) => '`' + s.replace(/`/g, '') + '`';
 
 export const postUpdateCell: RequestHandler = async (req, res) => {
   const { schema, table, where, column, value } = req.body as {
@@ -35,18 +32,18 @@ export const postUpdateCell: RequestHandler = async (req, res) => {
     return;
   }
 
+  const driver = getDriver();
   const qualifiedTable = schema
-    ? `${escapeIdent(schema)}.${escapeIdent(table)}`
-    : escapeIdent(table);
+    ? `${driver.escapeIdent(schema)}.${driver.escapeIdent(table)}`
+    : driver.escapeIdent(table);
 
-  const whereClause = where.map(w => `${escapeIdent(w.column)} = ?`).join(' AND ');
-  const sql = `UPDATE ${qualifiedTable} SET ${escapeIdent(column)} = ? WHERE ${whereClause} LIMIT 1`;
+  const whereClause = where.map(w => `${driver.escapeIdent(w.column)} = ?`).join(' AND ');
+  const sql = `UPDATE ${qualifiedTable} SET ${driver.escapeIdent(column)} = ? WHERE ${whereClause}${driver.rowLimitClause(1)}`;
   const params = [value === undefined ? null : value, ...where.map(w => w.value)];
 
   try {
-    const pool = getPool();
-    const [result] = await pool.query(sql, params) as [ResultSetHeader, unknown];
-    res.json({ affectedRows: result.affectedRows ?? 0, changedRows: (result as unknown as { changedRows?: number }).changedRows ?? 0, sql });
+    const result = await driver.query(sql, params);
+    res.json({ affectedRows: result.affectedRows ?? 0, sql });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     res.status(400).json({ error: message });
