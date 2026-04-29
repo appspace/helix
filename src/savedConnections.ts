@@ -1,5 +1,6 @@
 export interface SavedConnection {
   name: string;
+  type?: 'mysql' | 'postgres';
   host: string;
   port: string;
   user: string;

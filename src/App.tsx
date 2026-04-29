@@ -111,6 +111,7 @@ export default function App() {
       if (friendly) {
         saveConnection({
           name: friendly,
+          type: form.type,
           host: form.host,
           port: form.port,
           user: form.user,
