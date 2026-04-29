@@ -3,6 +3,7 @@ import type { RowDataPacket, FieldPacket, ResultSetHeader } from 'mysql2/promise
 import type { DbDriver, ConnectionConfig, QueryResult, ColumnMeta, ColumnInfo, SchemaInfo, TableInfo } from './interface.js';
 
 export class MysqlDriver implements DbDriver {
+  readonly queryMode = 'sql' as const;
   private pool: mysql.Pool;
 
   constructor(config: ConnectionConfig) {
