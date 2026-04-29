@@ -1,6 +1,6 @@
 export interface SavedConnection {
   name: string;
-  type?: 'mysql' | 'postgres';
+  type?: 'mysql' | 'postgres' | 'mongodb';
   host: string;
   port: string;
   user: string;
@@ -9,6 +9,8 @@ export interface SavedConnection {
   sslVerify?: boolean;
   // Whether the password is stored in the OS keychain (Electron only).
   savePassword?: boolean;
+  // Optional MongoDB connection string (mongodb:// or mongodb+srv://).
+  connectionString?: string;
 }
 
 const KEY = 'helix.connections';

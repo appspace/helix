@@ -30,8 +30,9 @@ interface ConnectionManagerProps {
 
 export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t }: ConnectionManagerProps) {
   const [saved, setSaved] = useState<SavedConnection[]>(() => listSavedConnections());
+  const formType = (t: SavedConnection['type']): 'mysql' | 'postgres' => t === 'postgres' ? 'postgres' : 'mysql';
   const initialForm: ConnectionForm = saved[0]
-    ? { ...saved[0], type: saved[0].type ?? 'mysql', password: '', sslVerify: saved[0].sslVerify ?? false, savePassword: saved[0].savePassword ?? false }
+    ? { ...saved[0], type: formType(saved[0].type), password: '', sslVerify: saved[0].sslVerify ?? false, savePassword: saved[0].savePassword ?? false }
     : {
         name: 'Local MySQL',
         type: 'mysql',
@@ -110,7 +111,7 @@ export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t
   };
 
   const applySaved = (entry: SavedConnection) => {
-    setForm({ ...entry, type: entry.type ?? 'mysql', password: '', sslVerify: entry.sslVerify ?? false, savePassword: entry.savePassword ?? false });
+    setForm({ ...entry, type: formType(entry.type), password: '', sslVerify: entry.sslVerify ?? false, savePassword: entry.savePassword ?? false });
     setAppliedSaved(entry.name);
     setSuggestOpen(false);
     if (entry.savePassword && electronAPI) {
