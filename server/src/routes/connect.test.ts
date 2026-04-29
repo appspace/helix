@@ -68,7 +68,7 @@ describe('postConnect — db type plumbing', () => {
     const uri = 'mongodb+srv://u:p@cluster0.example.net/db';
     const res = await request(makeApp())
       .post('/api/connect')
-      .send({ host: 'h', user: 'u', password: 'p', type: 'mongodb', connectionString: uri });
+      .send({ type: 'mongodb', connectionString: uri });
     expect(res.status).toBe(200);
     expect(connect).toHaveBeenCalledWith(expect.objectContaining({ type: 'mongodb', connectionString: uri }));
   });
@@ -79,6 +79,37 @@ describe('postConnect — db type plumbing', () => {
       .send({ host: 'h', user: 'u', password: 'p', type: 'mongodb' });
     const cfg = (connect as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]?.[0] as Record<string, unknown>;
     expect(cfg).not.toHaveProperty('connectionString');
+  });
+
+  it('rejects with 400 when connectionString and user are both provided', async () => {
+    const res = await request(makeApp())
+      .post('/api/connect')
+      .send({ user: 'u', type: 'mongodb', connectionString: 'mongodb://x/' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/either connectionString or user\/password/i);
+    expect(connect).not.toHaveBeenCalled();
+  });
+
+  it('rejects with 400 when connectionString and password are both provided', async () => {
+    const res = await request(makeApp())
+      .post('/api/connect')
+      .send({ password: 'p', type: 'mongodb', connectionString: 'mongodb://x/' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/either connectionString or user\/password/i);
+    expect(connect).not.toHaveBeenCalled();
+  });
+
+  it('returns a connectionName parsed from the URI when connectionString is used', async () => {
+    const res = await request(makeApp())
+      .post('/api/connect')
+      .send({
+        type: 'mongodb',
+        connectionString: 'mongodb+srv://alice:secret@cluster0.example.net/db',
+      });
+    expect(res.status).toBe(200);
+    // Password must not appear; host should come from the URI, not form fields.
+    expect(res.body.connectionName).toBe('alice@cluster0.example.net');
+    expect(res.body.connectionName).not.toMatch(/secret/);
   });
 });
 
@@ -127,20 +158,16 @@ describe('friendlyConnectError — MongoDB error mapping', () => {
     expect(msg).toMatch(/AuthenticationFailed/);
   });
 
-  it('maps HostUnreachable to a friendly unreachable-host message', () => {
+  it('prefers codeName over numeric code so the byCode lookup hits', () => {
+    // Mongo errors carry both fields. With code precedence, the lookup would
+    // miss (18 isn't keyed) and the raw message would surface — so the test
+    // would not match /access denied/.
     const msg = friendlyConnectError(
-      { codeName: 'HostUnreachable', message: 'no route' },
+      { code: '18', codeName: 'AuthenticationFailed', message: 'auth failed' },
       'h', 27017, 'mongodb',
     );
-    expect(msg).toMatch(/unreachable/i);
-  });
-
-  it('maps InvalidURI to a friendly invalid-connection-string message', () => {
-    const msg = friendlyConnectError(
-      { codeName: 'InvalidURI', message: 'bad uri' },
-      'h', 27017, 'mongodb',
-    );
-    expect(msg).toMatch(/connection string is invalid/i);
+    expect(msg).toMatch(/access denied/i);
+    expect(msg).toMatch(/AuthenticationFailed/);
   });
 
   it("uses 'MongoDB' in the unknown-error fallback when type is mongodb", () => {

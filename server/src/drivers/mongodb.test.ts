@@ -66,12 +66,10 @@ vi.mock('mongodb', () => ({
 import { MongoDBDriver } from './mongodb.js';
 import { MongoClient } from 'mongodb';
 
-// TODO(#108): ConnectionConfig.type needs 'mongodb'. Until that lands, MongoDB
-// fixtures here pass type: 'mysql' purely to satisfy the type system.
 function makeDriver(database?: string) {
   return new MongoDBDriver({
     host: 'h', port: 27017, user: 'u', password: 'p', database,
-    type: 'mysql',
+    type: 'mongodb',
   });
 }
 
@@ -80,7 +78,7 @@ function makeDriverConfig(overrides: Partial<{ user: string; password: string }>
     host: 'h', port: 27017,
     user: overrides.user as string,
     password: overrides.password as string,
-    type: 'mysql',
+    type: 'mongodb',
   });
 }
 
@@ -140,6 +138,16 @@ describe('MongoDBDriver – URI construction', () => {
   it('percent-encodes credentials with reserved characters', () => {
     makeDriverConfig({ user: 'a@b', password: 'p:w/d' });
     expect(uriFromLastCtor()).toBe('mongodb://a%40b:p%3Aw%2Fd@h:27017/');
+  });
+
+  it('short-circuits on connectionString — host/port/user/password are ignored', () => {
+    const uri = 'mongodb+srv://alice:secret@cluster0.example.net/db';
+    new MongoDBDriver({
+      host: 'ignored', port: 9999, user: 'ignored-u', password: 'ignored-p',
+      type: 'mongodb',
+      connectionString: uri,
+    });
+    expect(uriFromLastCtor()).toBe(uri);
   });
 });
 
