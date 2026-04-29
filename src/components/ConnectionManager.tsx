@@ -95,14 +95,17 @@ export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t
     setTestResult(null);
   };
 
-  const setDbType = (t: 'mysql' | 'postgres') => {
-    setForm(p => ({
-      ...p,
-      type: t,
-      port: p.port === '3306' || p.port === '5432' || p.port === ''
-        ? (t === 'mysql' ? '3306' : '5432')
-        : p.port,
-    }));
+  const defaultPort = (type: 'mysql' | 'postgres') => type === 'postgres' ? '5432' : '3306';
+  const setDbType = (next: 'mysql' | 'postgres') => {
+    setForm(p => {
+      const prevDefault = defaultPort(p.type);
+      const portIsPrevDefault = p.port === '' || p.port === prevDefault;
+      return {
+        ...p,
+        type: next,
+        port: portIsPrevDefault ? defaultPort(next) : p.port,
+      };
+    });
     setTestResult(null);
   };
 
