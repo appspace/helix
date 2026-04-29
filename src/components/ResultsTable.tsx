@@ -252,6 +252,25 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  // Escape dismisses Update cell / Delete row confirmations (when not mid-flight)
+  useEffect(() => {
+    if (!confirmDelete && !confirmUpdate) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (confirmUpdate && !confirmUpdate.saving) {
+        e.preventDefault();
+        setConfirmUpdate(null);
+        return;
+      }
+      if (confirmDelete && !deleting) {
+        e.preventDefault();
+        setConfirmDelete(null);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [confirmDelete, confirmUpdate, deleting]);
+
   useEffect(() => {
     if (filterOpen) { filterInputRef.current?.focus(); filterInputRef.current?.select(); }
   }, [filterOpen]);
