@@ -1,6 +1,6 @@
 import type { RequestHandler } from 'express';
 import type { ConnectionConfig } from '../drivers/interface.js';
-import { connect, disconnect, isConnected, getActiveConfig, testConnection } from '../db.js';
+import { connect, disconnect, isConnected, getActiveConfig, getDriver, testConnection } from '../db.js';
 
 type DbType = 'mysql' | 'postgres' | 'mongodb';
 
@@ -149,7 +149,11 @@ export const postConnect: RequestHandler = async (req, res) => {
 
   try {
     await connect(config);
-    res.json({ ok: true, connectionName: connectionLabel(config) });
+    res.json({
+      ok: true,
+      connectionName: connectionLabel(config),
+      queryMode: getDriver().queryMode,
+    });
   } catch (err) {
     res.status(400).json({ error: friendlyConnectError(err, config.host, config.port, config.type) });
   }
@@ -178,8 +182,10 @@ export const postTestConnect: RequestHandler = async (req, res) => {
 
 export const getStatus: RequestHandler = (_req, res) => {
   const config = getActiveConfig();
+  const connected = isConnected();
   res.json({
-    connected: isConnected(),
+    connected,
     connectionName: config ? connectionLabel(config) : null,
+    queryMode: connected ? getDriver().queryMode : null,
   });
 };

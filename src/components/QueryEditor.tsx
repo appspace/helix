@@ -29,6 +29,7 @@ interface QueryEditorProps {
   onChange: (val: string) => void;
   onRun: () => void;
   isRunning: boolean;
+  queryMode?: 'sql' | 'mql';
   activeSchema: string;
   schemaData?: SchemaData;
   runtimeError?: string | null;
@@ -72,11 +73,12 @@ const ToolBtn = ({ title, onClick, active, children, t }: { title: string; onCli
 );
 
 export function QueryEditor({
-  value, onChange, onRun, isRunning, activeSchema, schemaData, runtimeError,
+  value, onChange, onRun, isRunning, queryMode = 'sql', activeSchema, schemaData, runtimeError,
   history = [], onReopenHistory, onDeleteHistoryEntry, onClearHistory,
   savedQueries = [], onSaveQuery, onDeleteSavedQuery, onRenameSavedQuery, onReopenSavedQuery,
   t,
 }: QueryEditorProps) {
+  const isMql = queryMode === 'mql';
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -158,6 +160,18 @@ export function QueryEditor({
 
   const handleFormat = () => {
     if (!value.trim()) return;
+    if (isMql) {
+      try {
+        const parsed = JSON.parse(value);
+        const formatted = JSON.stringify(parsed, null, 2);
+        if (formatted !== value) onChange(formatted);
+        setFormatError(null);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        setFormatError(message);
+      }
+      return;
+    }
     try {
       const formatted = formatSql(value, { language: 'mysql', keywordCase: 'upper', tabWidth: 2 });
       if (formatted !== value) onChange(formatted);
@@ -232,7 +246,7 @@ export function QueryEditor({
   // Highlight the error line in the editor when a run error comes in from App.
   // The message itself is rendered by ResultsTable, so we don't show the format-error strip here.
   useEffect(() => {
-    if (!runtimeError) return;
+    if (!runtimeError || isMql) return;
     const loc = locateError(runtimeError, value);
     if (!loc) return;
     selectErrorLine(loc.lineStart, loc.lineEnd);
@@ -240,10 +254,23 @@ export function QueryEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runtimeError]);
 
+  const handleRunClick = () => {
+    if (isMql && value.trim()) {
+      try {
+        JSON.parse(value);
+        setFormatError(null);
+      } catch (err) {
+        setFormatError(err instanceof Error ? err.message : String(err));
+        return;
+      }
+    }
+    onRun();
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
       e.preventDefault();
-      onRun();
+      handleRunClick();
       return;
     }
     if (e.shiftKey && e.altKey && e.code === 'KeyF') {
@@ -281,12 +308,12 @@ export function QueryEditor({
     } as CSSProperties,
   };
 
-  const largeTableWarn = detectLargeTable(value, schemaData);
+  const largeTableWarn = isMql ? null : detectLargeTable(value, schemaData);
 
   return (
     <div style={s.root}>
       <div style={s.toolbar}>
-        <button style={{ ...s.runBtn, opacity: isRunning ? 0.85 : 1 }} onClick={onRun} data-tooltip={isRunning ? 'Stop query' : `Run query (${RUN_SHORTCUT})`}>
+        <button style={{ ...s.runBtn, opacity: isRunning ? 0.85 : 1 }} onClick={handleRunClick} data-tooltip={isRunning ? 'Stop query' : `Run query (${RUN_SHORTCUT})`}>
           {isRunning
             ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="6" y="6" width="12" height="12"/></svg>
             : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>}
@@ -294,7 +321,7 @@ export function QueryEditor({
           <span style={{ fontSize: 10, opacity: 0.65 }}>{RUN_SHORTCUT}</span>
         </button>
         <div style={s.sep}/>
-        <ToolBtn title={`Format SQL (${FORMAT_SHORTCUT})`} t={t} onClick={handleFormat}>
+        <ToolBtn title={`${isMql ? 'Format JSON' : 'Format SQL'} (${FORMAT_SHORTCUT})`} t={t} onClick={handleFormat}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <line x1="21" y1="10" x2="7" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="21" y1="18" x2="7" y2="18"/>
           </svg>
@@ -597,6 +624,50 @@ export function QueryEditor({
         </div>
         );
       })()}
+      {isMql && (
+        <div
+          style={{
+            display: 'flex', alignItems: 'center', gap: 10, padding: '6px 12px',
+            background: t.bgElevated, borderBottom: `1px solid ${t.border}`,
+            fontFamily: '"IBM Plex Sans", sans-serif', fontSize: 11, color: t.textSecondary,
+            flexShrink: 0,
+          }}
+        >
+          <span>MQL request — JSON object, e.g.{' '}
+            <code style={{ fontFamily: '"JetBrains Mono", monospace', color: t.textPrimary }}>
+              {'{ "collection": "users", "operation": "find", "filter": {} }'}
+            </code>
+          </span>
+          {schemaData && schemaData.tables.length > 0 && (
+            <>
+              <span style={{ flex: 1 }} />
+              <label style={{ color: t.textMuted }}>Insert collection:</label>
+              <select
+                value=""
+                onChange={(e) => {
+                  const name = e.target.value;
+                  if (!name) return;
+                  const snippet = JSON.stringify(
+                    { collection: name, operation: 'find', filter: {}, limit: 100 },
+                    null, 2,
+                  );
+                  onChange(snippet);
+                }}
+                style={{
+                  background: t.bgBase, color: t.textPrimary,
+                  border: `1px solid ${t.border}`, borderRadius: 3,
+                  fontSize: 11, fontFamily: 'inherit', padding: '2px 6px', outline: 'none',
+                }}
+              >
+                <option value="">— pick —</option>
+                {schemaData.tables.map(tbl => (
+                  <option key={tbl.name} value={tbl.name}>{tbl.name}</option>
+                ))}
+              </select>
+            </>
+          )}
+        </div>
+      )}
       <div style={s.editorWrap}>
         <div style={s.lineNums} aria-hidden="true">
           {value.split('\n').map((_, i) => (

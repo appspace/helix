@@ -8,7 +8,7 @@ import { QueryEditor } from './components/QueryEditor';
 import { ResultsTable, type QueryResults } from './components/ResultsTable';
 import { ConnectionManager, type ConnectionForm } from './components/ConnectionManager';
 import { api } from './api';
-import type { SchemaData } from './api';
+import type { SchemaData, QueryMode } from './api';
 import { saveConnection } from './savedConnections';
 import { electronAPI } from './electronAPI';
 import { addHistoryEntry, listHistory, deleteHistoryEntry, clearHistory, type HistoryEntry } from './queryHistory';
@@ -46,6 +46,7 @@ export default function App() {
   }, [themeName]);
 
   const [connected, setConnected] = useState(false);
+  const [queryMode, setQueryMode] = useState<QueryMode>('sql');
   const [showConnectionModal, setShowConnectionModal] = useState(true);
   const [isConnecting, setIsConnecting] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
@@ -100,6 +101,7 @@ export default function App() {
       const friendly = form.name.trim();
       setConnectionName(friendly || res.connectionName);
       setConnectionHost(res.connectionName);
+      setQueryMode(res.queryMode);
       setHistory(listHistory(res.connectionName));
       setSavedQueries(listSavedQueries(res.connectionName));
       setSchemas(list);
@@ -142,6 +144,7 @@ export default function App() {
   const handleDisconnect = async () => {
     try { await api.disconnect(); } catch { /* ignore */ }
     setConnected(false);
+    setQueryMode('sql');
     setShowConnectionModal(true);
     setConnectionName('Not connected');
     setConnectionHost(null);
@@ -209,8 +212,18 @@ export default function App() {
 
   const handleRun = async () => {
     if (isRunning) return;
-    const sql = currentTab?.query?.trim();
-    if (!sql) return;
+    const text = currentTab?.query?.trim();
+    if (!text) return;
+
+    let mqlPayload: unknown = null;
+    if (queryMode === 'mql') {
+      try {
+        mqlPayload = JSON.parse(text);
+      } catch {
+        // Editor surfaces the parse error inline; bail without firing a request.
+        return;
+      }
+    }
 
     setIsRunning(true);
     setResults(null);
@@ -219,12 +232,14 @@ export default function App() {
 
     const started = Date.now();
     try {
-      const res = await api.query(sql, activeSchema);
+      const res = queryMode === 'mql'
+        ? await api.queryMql(mqlPayload, activeSchema)
+        : await api.query(text, activeSchema);
       setResults({ columns: res.columns, columnMeta: res.columnMeta, rows: res.rows });
       setExecTime(res.executionTime);
       if (connectionHost) {
         const entry = addHistoryEntry(connectionHost, {
-          sql, schema: activeSchema, executedAt: started,
+          sql: text, schema: activeSchema, executedAt: started,
           durationMs: res.executionTime, status: 'ok', rowCount: res.rows.length,
         });
         if (entry) setHistory(prev => [entry, ...prev].slice(0, 100));
@@ -234,7 +249,7 @@ export default function App() {
       setQueryError(message);
       if (connectionHost) {
         const entry = addHistoryEntry(connectionHost, {
-          sql, schema: activeSchema, executedAt: started,
+          sql: text, schema: activeSchema, executedAt: started,
           durationMs: Date.now() - started, status: 'error', error: message,
         });
         if (entry) setHistory(prev => [entry, ...prev].slice(0, 100));
@@ -306,7 +321,12 @@ export default function App() {
 
   const handleTableSelect = (name: string) => {
     setActiveTable(name);
-    addTab(`${name}.sql`, `SELECT *\nFROM \`${name}\`\nLIMIT 100;`);
+    if (queryMode === 'mql') {
+      const body = JSON.stringify({ collection: name, operation: 'find', filter: {}, limit: 100 }, null, 2);
+      addTab(`${name}.json`, body);
+    } else {
+      addTab(`${name}.sql`, `SELECT *\nFROM \`${name}\`\nLIMIT 100;`);
+    }
   };
 
   const switchTab = (id: string) => {
@@ -393,6 +413,7 @@ export default function App() {
               onChange={handleQueryChange}
               onRun={handleRun}
               isRunning={isRunning}
+              queryMode={queryMode}
               activeSchema={activeSchema}
               schemaData={schemaData}
               runtimeError={queryError}
