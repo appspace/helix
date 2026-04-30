@@ -11,6 +11,9 @@ export const postQuery: RequestHandler = async (req, res) => {
 
   let queryText: string;
 
+  // Both `sql` and `mql` present is treated as a mode mismatch — the client is
+  // clearly confused about the connection mode, and we'd rather 400 than silently
+  // pick one. The mismatch check therefore runs before the "field is required" check.
   if (driver.queryMode === 'sql') {
     if (mql !== undefined) {
       res.status(400).json({
@@ -31,7 +34,7 @@ export const postQuery: RequestHandler = async (req, res) => {
       });
       return;
     }
-    if (!mql || typeof mql !== 'object') {
+    if (mql === null || typeof mql !== 'object' || Array.isArray(mql)) {
       res.status(400).json({ error: 'mql request object is required.' });
       return;
     }
@@ -61,6 +64,9 @@ export const postQuery: RequestHandler = async (req, res) => {
       executionTime,
     });
   } catch (err) {
+    // All driver errors map to 400 today — lossy for transient/infra failures
+    // (e.g. MongoServerSelectionError, MongoNetworkError, connection drops).
+    // See #122 for the proposed classification (client / transient / server).
     const message = err instanceof Error ? err.message : String(err);
     res.status(400).json({ error: message });
   }

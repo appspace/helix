@@ -209,6 +209,35 @@ describe('postQuery – mql mode', () => {
     expect(res.body.error).toMatch(/mql/i);
   });
 
+  it.each([
+    ['array', [1, 2]],
+    ['null', null],
+    ['number', 42],
+  ])('returns 400 when mql is %s (non-object payload)', async (_label, payload) => {
+    const mockDriver = { queryMode: 'mql' as const, query: vi.fn() };
+    vi.mocked(getDriver).mockReturnValue(mockDriver as any);
+
+    const res = await request(makeApp())
+      .post('/api/query')
+      .send({ mql: payload });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/mql/i);
+    expect(mockDriver.query).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when mql is a string (treated as SQL/MQL mismatch)', async () => {
+    const mockDriver = { queryMode: 'mql' as const, query: vi.fn() };
+    vi.mocked(getDriver).mockReturnValue(mockDriver as any);
+
+    const res = await request(makeApp())
+      .post('/api/query')
+      .send({ mql: 'oops' });
+
+    expect(res.status).toBe(400);
+    expect(mockDriver.query).not.toHaveBeenCalled();
+  });
+
   it('returns 400 when driver.query() throws in mql mode', async () => {
     const mockDriver = {
       queryMode: 'mql' as const,
@@ -253,6 +282,32 @@ describe('postQuery – mode mismatch', () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/SQL mode/i);
     expect(res.body.error).toMatch(/MQL request/i);
+    expect(mockDriver.query).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when both sql and mql are sent in sql mode (mismatch wins over valid sql)', async () => {
+    const mockDriver = { queryMode: 'sql' as const, query: vi.fn() };
+    vi.mocked(getDriver).mockReturnValue(mockDriver as any);
+
+    const res = await request(makeApp())
+      .post('/api/query')
+      .send({ sql: 'SELECT 1', mql: { collection: 'x', operation: 'find' } });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/SQL mode/i);
+    expect(mockDriver.query).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when both sql and mql are sent in mql mode (mismatch wins over valid mql)', async () => {
+    const mockDriver = { queryMode: 'mql' as const, query: vi.fn() };
+    vi.mocked(getDriver).mockReturnValue(mockDriver as any);
+
+    const res = await request(makeApp())
+      .post('/api/query')
+      .send({ sql: 'SELECT 1', mql: { collection: 'x', operation: 'find' } });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/MQL mode/i);
     expect(mockDriver.query).not.toHaveBeenCalled();
   });
 });
