@@ -1,13 +1,15 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import type { CSSProperties } from 'react';
 import type { Theme } from '../theme';
 import { api } from '../api';
 import { listSavedConnections, deleteSavedConnection, type SavedConnection } from '../savedConnections';
 import { electronAPI } from '../electronAPI';
 
+export type DbType = 'mysql' | 'postgres' | 'mongodb';
+
 export interface ConnectionForm {
   name: string;
-  type: 'mysql' | 'postgres';
+  type: DbType;
   host: string;
   port: string;
   user: string;
@@ -18,10 +20,11 @@ export interface ConnectionForm {
   // Only meaningful in Electron — when true, the password is persisted via
   // safeStorage and reloaded the next time this connection is opened.
   savePassword: boolean;
-  // Opaque pass-through for mongodb-only entries — carried from a saved entry
-  // so re-save round-trips it. Not editable in this form; #113 will replace
-  // this with a real mongodb form and remove this field.
+  // Only meaningful when type === 'mongodb' AND mongoMode === 'uri'.
   connectionString?: string;
+  // UI state: which input mode the mongodb form is in. Persisted alongside
+  // the connection itself (derived on load: presence of connectionString).
+  mongoMode?: 'fields' | 'uri';
 }
 
 interface ConnectionManagerProps {
@@ -32,37 +35,68 @@ interface ConnectionManagerProps {
   t: Theme;
 }
 
+const defaultPort = (type: DbType): string => {
+  if (type === 'postgres') return '5432';
+  if (type === 'mongodb') return '27017';
+  return '3306';
+};
+
+const dbLabel = (type: DbType): string => {
+  if (type === 'postgres') return 'PostgreSQL';
+  if (type === 'mongodb') return 'MongoDB';
+  return 'MySQL';
+};
+
+// Mirrors `connectionLabel` in `server/src/routes/connect.ts`: rewrites
+// `mongodb+srv://` so WHATWG URL populates host/username, and prefers
+// `hostname` over `host` so we never leak an explicit port. Returns just the
+// host portion (no `user@`) for the autocomplete subtitle. Falls back to a
+// neutral placeholder rather than the raw URI so a malformed entry — or one
+// we can't parse — never displays an embedded password.
+const hostFromConnectionString = (uri: string): string => {
+  try {
+    const normalized = uri.replace(/^mongodb\+srv:\/\//, 'mongodb://');
+    const url = new URL(normalized);
+    return url.hostname || '<connectionString>';
+  } catch {
+    return '<connectionString>';
+  }
+};
+
+const formFromSaved = (entry: SavedConnection): ConnectionForm => {
+  const type: DbType = entry.type ?? 'mysql';
+  const mongoMode: 'fields' | 'uri' = type === 'mongodb' && entry.connectionString ? 'uri' : 'fields';
+  return {
+    name: entry.name,
+    type,
+    host: entry.host ?? '',
+    port: entry.port ?? '',
+    user: entry.user ?? '',
+    password: '',
+    database: entry.database ?? '',
+    ssl: entry.ssl ?? false,
+    sslVerify: entry.sslVerify ?? false,
+    savePassword: entry.savePassword ?? false,
+    connectionString: entry.connectionString,
+    mongoMode,
+  };
+};
+
 export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t }: ConnectionManagerProps) {
   const [saved, setSaved] = useState<SavedConnection[]>(() => listSavedConnections());
-  // Carries opaque mongodb connectionStrings from saved entries through the form
-  // so re-save preserves them. Keyed by connection name.
-  const connectionStringsRef = useRef<Map<string, string>>(new Map());
-  const formType = (saved: SavedConnection['type']): 'mysql' | 'postgres' => {
-    switch (saved) {
-      case 'postgres': return 'postgres';
-      case 'mysql':
-      case 'mongodb':
-      case undefined:
-        return 'mysql';
-    }
-  };
-  const initialForm: ConnectionForm = saved[0]
-    ? { ...saved[0], type: formType(saved[0].type), password: '', sslVerify: saved[0].sslVerify ?? false, savePassword: saved[0].savePassword ?? false, connectionString: saved[0].connectionString }
-    : {
-        name: 'Local MySQL',
-        type: 'mysql',
-        host: import.meta.env['VITE_DEFAULT_HOST'] ?? 'localhost',
-        port: import.meta.env['VITE_DEFAULT_PORT'] ?? '3306',
-        user: import.meta.env['VITE_DEFAULT_USER'] ?? 'root',
-        password: '', database: '', ssl: false, sslVerify: true, savePassword: false,
-      };
-  const [form, setForm] = useState<ConnectionForm>(initialForm);
-  // Seed the carry-forward map from any saved entry that already has a connectionString.
-  if (connectionStringsRef.current.size === 0) {
-    for (const entry of saved) {
-      if (entry.connectionString) connectionStringsRef.current.set(entry.name, entry.connectionString);
-    }
-  }
+  const [form, setForm] = useState<ConnectionForm>(() => {
+    const list = listSavedConnections();
+    if (list[0]) return formFromSaved(list[0]);
+    return {
+      name: 'Local MySQL',
+      type: 'mysql',
+      host: import.meta.env['VITE_DEFAULT_HOST'] ?? 'localhost',
+      port: import.meta.env['VITE_DEFAULT_PORT'] ?? '3306',
+      user: import.meta.env['VITE_DEFAULT_USER'] ?? 'root',
+      password: '', database: '', ssl: false, sslVerify: true, savePassword: false,
+      mongoMode: 'fields',
+    };
+  });
   // Track the saved entry currently reflected in the form, so we only auto-populate once per match.
   const [appliedSaved, setAppliedSaved] = useState<string>(saved[0]?.name ?? '');
   const [suggestOpen, setSuggestOpen] = useState(false);
@@ -99,11 +133,21 @@ export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t
     return () => window.removeEventListener('keydown', key);
   }, [onDismiss, isConnecting]);
 
+  const isMongoUri = form.type === 'mongodb' && form.mongoMode === 'uri';
+
+  const buildSubmitForm = (): ConnectionForm => {
+    if (isMongoUri) return form;
+    // Strip connectionString in fields mode so it can't slip through if a stale
+    // value lingered in form state (e.g. after switching modes/types).
+    const { connectionString: _cs, ...rest } = form;
+    return { ...rest };
+  };
+
   const runTest = async () => {
     setTesting(true);
     setTestResult(null);
     try {
-      await api.testConnection(form);
+      await api.testConnection(buildSubmitForm());
       setTestResult({ ok: true });
     } catch (err) {
       setTestResult({ ok: false, error: err instanceof Error ? err.message : String(err) });
@@ -117,23 +161,29 @@ export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t
     setTestResult(null);
   };
 
-  const defaultPort = (type: 'mysql' | 'postgres') => type === 'postgres' ? '5432' : '3306';
-  const setDbType = (next: 'mysql' | 'postgres') => {
+  const setDbType = (next: DbType) => {
     setForm(p => {
       const prevDefault = defaultPort(p.type);
       const portIsPrevDefault = p.port === '' || p.port === prevDefault;
+      const nextMongoMode = next === 'mongodb' ? (p.mongoMode ?? 'fields') : 'fields';
       return {
         ...p,
         type: next,
         port: portIsPrevDefault ? defaultPort(next) : p.port,
+        mongoMode: nextMongoMode,
+        connectionString: next === 'mongodb' ? p.connectionString : undefined,
       };
     });
     setTestResult(null);
   };
 
+  const setMongoMode = (mode: 'fields' | 'uri') => {
+    setForm(p => ({ ...p, mongoMode: mode }));
+    setTestResult(null);
+  };
+
   const applySaved = (entry: SavedConnection) => {
-    if (entry.connectionString) connectionStringsRef.current.set(entry.name, entry.connectionString);
-    setForm({ ...entry, type: formType(entry.type), password: '', sslVerify: entry.sslVerify ?? false, savePassword: entry.savePassword ?? false, connectionString: entry.connectionString });
+    setForm(formFromSaved(entry));
     setAppliedSaved(entry.name);
     setSuggestOpen(false);
     if (entry.savePassword && electronAPI) {
@@ -186,6 +236,16 @@ export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t
     connectBtn: { height: 32, padding: '0 18px', background: t.accent, border: 'none', borderRadius: 5, fontSize: 13, fontWeight: 600, color: t.textInverse, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontFamily: '"IBM Plex Sans", sans-serif' } as CSSProperties,
   };
 
+  const dbTypeBtnStyle = (active: boolean): CSSProperties => ({
+    height: 30, padding: '0 14px',
+    background: active ? t.accent : t.bgInput,
+    border: `1px solid ${active ? t.accent : t.border}`,
+    borderRadius: 5, fontSize: 12, fontWeight: active ? 600 : 400,
+    color: active ? t.textInverse : t.textSecondary,
+    cursor: 'pointer', fontFamily: '"IBM Plex Sans", sans-serif',
+    transition: 'background 120ms, color 120ms, border-color 120ms',
+  });
+
   return (
     <div style={s.overlay} onClick={!isConnecting ? onDismiss : undefined}>
       <div style={s.modal} onClick={(e) => e.stopPropagation()}>
@@ -199,7 +259,7 @@ export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t
           </svg>
           <div>
             <div style={s.title}>New connection</div>
-            <div style={s.subtitle}>Connect to a {form.type === 'postgres' ? 'PostgreSQL' : 'MySQL'} server</div>
+            <div style={s.subtitle}>Connect to a {dbLabel(form.type)} server</div>
           </div>
         </div>
 
@@ -207,8 +267,7 @@ export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t
           onSubmit={(e) => {
             e.preventDefault();
             if (isConnecting) return;
-            const carried = connectionStringsRef.current.get(form.name.trim());
-            onConnect(carried ? { ...form, connectionString: carried } : form);
+            onConnect(buildSubmitForm());
           }}
           autoComplete="on"
         >
@@ -216,29 +275,36 @@ export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t
             <div style={s.field}>
               <label style={s.label}>Database type</label>
               <div style={{ display: 'flex', gap: 6 }}>
-                {(['mysql', 'postgres'] as const).map(dbType => {
-                  const active = form.type === dbType;
-                  return (
-                    <button
-                      key={dbType}
-                      type="button"
-                      onClick={() => setDbType(dbType)}
-                      style={{
-                        height: 30, padding: '0 14px',
-                        background: active ? t.accent : t.bgInput,
-                        border: `1px solid ${active ? t.accent : t.border}`,
-                        borderRadius: 5, fontSize: 12, fontWeight: active ? 600 : 400,
-                        color: active ? t.textInverse : t.textSecondary,
-                        cursor: 'pointer', fontFamily: '"IBM Plex Sans", sans-serif',
-                        transition: 'background 120ms, color 120ms, border-color 120ms',
-                      }}
-                    >
-                      {dbType === 'mysql' ? 'MySQL' : 'PostgreSQL'}
-                    </button>
-                  );
-                })}
+                {(['mysql', 'postgres', 'mongodb'] as const).map(dbType => (
+                  <button
+                    key={dbType}
+                    type="button"
+                    onClick={() => setDbType(dbType)}
+                    style={dbTypeBtnStyle(form.type === dbType)}
+                  >
+                    {dbLabel(dbType)}
+                  </button>
+                ))}
               </div>
             </div>
+
+            {form.type === 'mongodb' && (
+              <div style={s.field}>
+                <label style={s.label}>Input mode</label>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  {(['fields', 'uri'] as const).map(mode => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => setMongoMode(mode)}
+                      style={dbTypeBtnStyle(form.mongoMode === mode)}
+                    >
+                      {mode === 'fields' ? 'Fields' : 'Connection string'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <div style={s.field}>
               <label style={s.label}>
@@ -298,7 +364,7 @@ export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t
                                 {(c.user || c.host || c.port)
                                   ? <>{c.user}@{c.host}:{c.port}</>
                                   : c.connectionString
-                                    ? <>{(() => { try { return new URL(c.connectionString!).host || c.connectionString; } catch { return c.connectionString; } })()}</>
+                                    ? <>{hostFromConnectionString(c.connectionString)}</>
                                     : null}
                                 {c.database && <span style={{ marginLeft: 6 }}>· {c.database}</span>}
                                 {c.ssl && <span style={{ marginLeft: 6, color: t.accent }}>· SSL</span>}
@@ -324,73 +390,89 @@ export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t
               </div>
             </div>
 
-            <div style={s.row}>
-              <div style={{ ...s.field, flex: 1 }}>
-                <label style={s.label}>Host</label>
-                <input
-                  style={s.input}
-                  name="host"
+            {isMongoUri ? (
+              <div style={s.field}>
+                <label style={s.label}>Connection string</label>
+                <textarea
+                  style={{ ...s.input, height: 72, padding: '8px 10px', fontFamily: 'monospace', resize: 'vertical' }}
+                  name="connection-string"
                   autoComplete="off"
-                  value={form.host}
-                  onChange={e => set('host', e.target.value)}
-                  placeholder="localhost"
+                  value={form.connectionString ?? ''}
+                  onChange={e => set('connectionString', e.target.value)}
+                  placeholder="mongodb://user:pass@host:27017/?authSource=admin"
                 />
               </div>
-              <div style={{ ...s.field, width: 90 }}>
-                <label style={s.label}>Port</label>
-                <input
-                  style={{ ...s.input, fontFamily: 'monospace' }}
-                  name="port"
-                  autoComplete="off"
-                  value={form.port}
-                  onChange={e => set('port', e.target.value)}
-                  placeholder={form.type === 'postgres' ? '5432' : '3306'}
-                />
-              </div>
-            </div>
+            ) : (
+              <>
+                <div style={s.row}>
+                  <div style={{ ...s.field, flex: 1 }}>
+                    <label style={s.label}>Host</label>
+                    <input
+                      style={s.input}
+                      name="host"
+                      autoComplete="off"
+                      value={form.host}
+                      onChange={e => set('host', e.target.value)}
+                      placeholder="localhost"
+                    />
+                  </div>
+                  <div style={{ ...s.field, width: 90 }}>
+                    <label style={s.label}>Port</label>
+                    <input
+                      style={{ ...s.input, fontFamily: 'monospace' }}
+                      name="port"
+                      autoComplete="off"
+                      value={form.port}
+                      onChange={e => set('port', e.target.value)}
+                      placeholder={defaultPort(form.type)}
+                    />
+                  </div>
+                </div>
 
-            <div style={s.row}>
-              <div style={{ ...s.field, flex: 1 }}>
-                <label style={s.label}>Username</label>
-                <input
-                  style={s.input}
-                  name="username"
-                  autoComplete="username"
-                  value={form.user}
-                  onChange={e => set('user', e.target.value)}
-                  placeholder="root"
-                />
-              </div>
-              <div style={{ ...s.field, flex: 1 }}>
-                <label style={s.label}>Password</label>
-                <input
-                  style={s.input}
-                  type="password"
-                  name="password"
-                  autoComplete="current-password"
-                  value={form.password}
-                  onChange={e => set('password', e.target.value)}
-                  placeholder="••••••••"
-                />
-              </div>
-            </div>
+                <div style={s.row}>
+                  <div style={{ ...s.field, flex: 1 }}>
+                    <label style={s.label}>Username</label>
+                    <input
+                      style={s.input}
+                      name="username"
+                      autoComplete="username"
+                      value={form.user}
+                      onChange={e => set('user', e.target.value)}
+                      placeholder="root"
+                    />
+                  </div>
+                  <div style={{ ...s.field, flex: 1 }}>
+                    <label style={s.label}>Password</label>
+                    <input
+                      style={s.input}
+                      type="password"
+                      name="password"
+                      autoComplete="current-password"
+                      value={form.password}
+                      onChange={e => set('password', e.target.value)}
+                      placeholder="••••••••"
+                    />
+                  </div>
+                </div>
 
-            {canSavePassword && (
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginTop: -4 }}>
-                <input
-                  type="checkbox"
-                  checked={form.savePassword}
-                  onChange={e => set('savePassword', e.target.checked)}
-                  style={{ width: 14, height: 14, cursor: 'pointer', accentColor: t.accent }}
-                />
-                <span style={{ fontSize: 12.5, color: t.textSecondary }}>Save password</span>
-                <span style={{ fontSize: 11, color: t.textMuted }}>(encrypted via OS keychain)</span>
-              </label>
+                {canSavePassword && (
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginTop: -4 }}>
+                    <input
+                      type="checkbox"
+                      checked={form.savePassword}
+                      onChange={e => set('savePassword', e.target.checked)}
+                      style={{ width: 14, height: 14, cursor: 'pointer', accentColor: t.accent }}
+                    />
+                    <span style={{ fontSize: 12.5, color: t.textSecondary }}>Save password</span>
+                    <span style={{ fontSize: 11, color: t.textMuted }}>(encrypted via OS keychain)</span>
+                  </label>
+                )}
+              </>
             )}
 
             <div style={s.field}>
               <label style={s.label}>
-                Default schema{' '}
+                {form.type === 'mongodb' ? 'Default database' : 'Default schema'}{' '}
                 <span style={{ color: t.textMuted, textTransform: 'none', letterSpacing: 0, fontWeight: 400 }}>(optional)</span>
               </label>
               <input
@@ -454,7 +536,7 @@ export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={t.colorSuccess} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <polyline points="20 6 9 17 4 12"/>
                 </svg>
-                <span>Connection successful — {form.user}@{form.host}:{form.port || (form.type === 'postgres' ? 5432 : 3306)}</span>
+                <span>Connection successful{!isMongoUri && <> — {form.user}@{form.host}:{form.port || defaultPort(form.type)}</>}</span>
               </div>
             )}
             {testResult && !testResult.ok && (
