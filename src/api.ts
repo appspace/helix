@@ -43,6 +43,32 @@ export interface DeleteRowWhere {
   value: string | number | boolean | null;
 }
 
+interface ConnectFormInput {
+  type: 'mysql' | 'postgres' | 'mongodb';
+  host: string;
+  port: string;
+  user: string;
+  password: string;
+  database: string;
+  ssl: boolean;
+  sslVerify: boolean;
+  connectionString?: string;
+}
+
+function buildConnectBody(form: ConnectFormInput) {
+  const sslMode = !form.ssl ? undefined : form.sslVerify ? 'verify-full' : 'require';
+  return {
+    type: form.type,
+    host: form.host,
+    port: Number(form.port),
+    user: form.user,
+    password: form.password,
+    database: form.database,
+    ssl: sslMode,
+    ...(form.connectionString ? { connectionString: form.connectionString } : {}),
+  };
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...init });
   const body = await res.json() as T & { error?: string };
@@ -54,21 +80,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  connect(form: { type: 'mysql' | 'postgres'; host: string; port: string; user: string; password: string; database: string; ssl: boolean; sslVerify: boolean; connectionString?: string }) {
-    const { ssl, sslVerify, ...rest } = form;
-    const sslMode = !ssl ? undefined : sslVerify ? 'verify-full' : 'require';
+  connect(form: ConnectFormInput) {
     return request<{ ok: boolean; connectionName: string }>('/api/connect', {
       method: 'POST',
-      body: JSON.stringify({ ...rest, port: Number(form.port), ssl: sslMode }),
+      body: JSON.stringify(buildConnectBody(form)),
     });
   },
 
-  testConnection(form: { type: 'mysql' | 'postgres'; host: string; port: string; user: string; password: string; database: string; ssl: boolean; sslVerify: boolean }) {
-    const { ssl, sslVerify, ...rest } = form;
-    const sslMode = !ssl ? undefined : sslVerify ? 'verify-full' : 'require';
+  testConnection(form: ConnectFormInput) {
     return request<{ ok: boolean }>('/api/connect/test', {
       method: 'POST',
-      body: JSON.stringify({ ...rest, port: Number(form.port), ssl: sslMode }),
+      body: JSON.stringify(buildConnectBody(form)),
     });
   },
 
