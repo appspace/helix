@@ -90,9 +90,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body;
 }
 
+export type QueryMode = 'sql' | 'mql';
+
 export const api = {
   connect(form: ConnectFormInput) {
-    return request<{ ok: boolean; connectionName: string }>('/api/connect', {
+    return request<{ ok: boolean; connectionName: string; queryMode: QueryMode }>('/api/connect', {
       method: 'POST',
       body: JSON.stringify(buildConnectBody(form)),
     });
@@ -110,7 +112,7 @@ export const api = {
   },
 
   status() {
-    return request<{ connected: boolean; connectionName: string | null }>('/api/connect/status');
+    return request<{ connected: boolean; connectionName: string | null; queryMode: QueryMode | null }>('/api/connect/status');
   },
 
   schemas() {
@@ -130,6 +132,13 @@ export const api = {
     return request<QueryResults & { columnMeta?: ColumnMeta[]; executionTime: number; affectedRows?: number; insertId?: number }>(
       '/api/query',
       { method: 'POST', body: JSON.stringify({ sql, schema }) }
+    );
+  },
+
+  queryMql(mql: unknown, schema: string) {
+    return request<QueryResults & { columnMeta?: ColumnMeta[]; executionTime: number; affectedRows?: number; insertId?: number }>(
+      '/api/query',
+      { method: 'POST', body: JSON.stringify({ mql, schema }) }
     );
   },
 

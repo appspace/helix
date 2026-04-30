@@ -8,6 +8,7 @@ vi.mock('../db.js', () => ({
   disconnect: vi.fn().mockResolvedValue(undefined),
   isConnected: vi.fn().mockReturnValue(true),
   getActiveConfig: vi.fn().mockReturnValue(null),
+  getDriver: vi.fn().mockReturnValue({ queryMode: 'sql' }),
 }));
 
 import { connect, testConnection } from '../db.js';
