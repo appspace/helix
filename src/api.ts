@@ -45,27 +45,38 @@ export interface DeleteRowWhere {
 
 interface ConnectFormInput {
   type: 'mysql' | 'postgres' | 'mongodb';
-  host: string;
-  port: string;
-  user: string;
-  password: string;
+  host?: string;
+  port?: string;
+  user?: string;
+  password?: string;
   database: string;
   ssl: boolean;
   sslVerify: boolean;
   connectionString?: string;
 }
 
+// Presence-based: when `connectionString` is set we omit host/port/user/password
+// entirely so the wire payload reflects the API invariant that the URI is the
+// sole source of credentials. Mirrors the route's collision check in
+// `server/src/routes/connect.ts`.
 function buildConnectBody(form: ConnectFormInput) {
   const sslMode = !form.ssl ? undefined : form.sslVerify ? 'verify-full' : 'require';
+  if (form.connectionString) {
+    return {
+      type: form.type,
+      database: form.database,
+      ssl: sslMode,
+      connectionString: form.connectionString,
+    };
+  }
   return {
     type: form.type,
-    host: form.host,
-    port: Number(form.port),
-    user: form.user,
-    password: form.password,
+    host: form.host ?? '',
+    port: Number(form.port ?? ''),
+    user: form.user ?? '',
+    password: form.password ?? '',
     database: form.database,
     ssl: sslMode,
-    ...(form.connectionString ? { connectionString: form.connectionString } : {}),
   };
 }
 

@@ -47,6 +47,22 @@ const dbLabel = (type: DbType): string => {
   return 'MySQL';
 };
 
+// Mirrors `connectionLabel` in `server/src/routes/connect.ts`: rewrites
+// `mongodb+srv://` so WHATWG URL populates host/username, and prefers
+// `hostname` over `host` so we never leak an explicit port. Returns just the
+// host portion (no `user@`) for the autocomplete subtitle. Falls back to a
+// neutral placeholder rather than the raw URI so a malformed entry — or one
+// we can't parse — never displays an embedded password.
+const hostFromConnectionString = (uri: string): string => {
+  try {
+    const normalized = uri.replace(/^mongodb\+srv:\/\//, 'mongodb://');
+    const url = new URL(normalized);
+    return url.hostname || '<connectionString>';
+  } catch {
+    return '<connectionString>';
+  }
+};
+
 const formFromSaved = (entry: SavedConnection): ConnectionForm => {
   const type: DbType = entry.type ?? 'mysql';
   const mongoMode: 'fields' | 'uri' = type === 'mongodb' && entry.connectionString ? 'uri' : 'fields';
@@ -120,10 +136,9 @@ export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t
   const isMongoUri = form.type === 'mongodb' && form.mongoMode === 'uri';
 
   const buildSubmitForm = (): ConnectionForm => {
-    if (isMongoUri) {
-      // URI mode owns the credentials; the route 400s if both are sent.
-      return { ...form, host: '', port: '', user: '', password: '' };
-    }
+    if (isMongoUri) return form;
+    // Strip connectionString in fields mode so it can't slip through if a stale
+    // value lingered in form state (e.g. after switching modes/types).
     const { connectionString: _cs, ...rest } = form;
     return { ...rest };
   };
@@ -156,6 +171,7 @@ export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t
         type: next,
         port: portIsPrevDefault ? defaultPort(next) : p.port,
         mongoMode: nextMongoMode,
+        connectionString: next === 'mongodb' ? p.connectionString : undefined,
       };
     });
     setTestResult(null);
@@ -348,7 +364,7 @@ export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t
                                 {(c.user || c.host || c.port)
                                   ? <>{c.user}@{c.host}:{c.port}</>
                                   : c.connectionString
-                                    ? <>{(() => { try { return new URL(c.connectionString!).host || c.connectionString; } catch { return c.connectionString; } })()}</>
+                                    ? <>{hostFromConnectionString(c.connectionString)}</>
                                     : null}
                                 {c.database && <span style={{ marginLeft: 6 }}>· {c.database}</span>}
                                 {c.ssl && <span style={{ marginLeft: 6, color: t.accent }}>· SSL</span>}
