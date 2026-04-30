@@ -2,16 +2,45 @@ import type { RequestHandler } from 'express';
 import { getDriver } from '../db.js';
 
 export const postQuery: RequestHandler = async (req, res) => {
-  const { sql, schema } = req.body as { sql: string; schema?: string };
+  const driver = getDriver();
+  const { sql, mql, schema } = req.body as {
+    sql?: unknown;
+    mql?: unknown;
+    schema?: string;
+  };
 
-  if (!sql?.trim()) {
-    res.status(400).json({ error: 'sql is required.' });
-    return;
+  let queryText: string;
+
+  if (driver.queryMode === 'sql') {
+    if (mql !== undefined) {
+      res.status(400).json({
+        error: 'This connection is in SQL mode; expected a "sql" string body, not a MQL request.',
+      });
+      return;
+    }
+    if (typeof sql !== 'string' || !sql.trim()) {
+      res.status(400).json({ error: 'sql is required.' });
+      return;
+    }
+    queryText = sql;
+  } else {
+    // mql mode
+    if (typeof sql === 'string') {
+      res.status(400).json({
+        error: 'This connection is in MQL mode; expected a "mql" object body, not a SQL string.',
+      });
+      return;
+    }
+    if (!mql || typeof mql !== 'object') {
+      res.status(400).json({ error: 'mql request object is required.' });
+      return;
+    }
+    queryText = JSON.stringify(mql);
   }
 
   try {
     const start = Date.now();
-    const result = await getDriver().query(sql, [], schema);
+    const result = await driver.query(queryText, [], schema);
     const executionTime = Date.now() - start;
 
     if (result.columnMeta.length === 0) {
