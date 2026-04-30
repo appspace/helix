@@ -219,8 +219,13 @@ export default function App() {
     if (queryMode === 'mql') {
       try {
         mqlPayload = JSON.parse(text);
-      } catch {
-        // Editor surfaces the parse error inline; bail without firing a request.
+      } catch (err) {
+        // Surface the error so callers that bypass QueryEditor.handleRunClick still see it.
+        setQueryError(err instanceof Error ? err.message : String(err));
+        return;
+      }
+      if (typeof mqlPayload !== 'object' || mqlPayload === null || Array.isArray(mqlPayload)) {
+        setQueryError('MQL request must be a JSON object (e.g. { "collection": "...", "operation": "find" }).');
         return;
       }
     }

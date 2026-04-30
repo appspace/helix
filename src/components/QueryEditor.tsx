@@ -156,7 +156,7 @@ export function QueryEditor({
 
   const now = Date.now();
 
-  const [formatError, setFormatError] = useState<string | null>(null);
+  const [editorError, setEditorError] = useState<{ kind: 'format' | 'run'; message: string } | null>(null);
 
   const handleFormat = () => {
     if (!value.trim()) return;
@@ -165,17 +165,17 @@ export function QueryEditor({
         const parsed = JSON.parse(value);
         const formatted = JSON.stringify(parsed, null, 2);
         if (formatted !== value) onChange(formatted);
-        setFormatError(null);
+        setEditorError(null);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        setFormatError(message);
+        setEditorError({ kind: 'format', message });
       }
       return;
     }
     try {
       const formatted = formatSql(value, { language: 'mysql', keywordCase: 'upper', tabWidth: 2 });
       if (formatted !== value) onChange(formatted);
-      setFormatError(null);
+      setEditorError(null);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       handleFormatError(message);
@@ -237,9 +237,9 @@ export function QueryEditor({
 
   const handleFormatError = (message: string) => {
     const loc = locateError(message, value);
-    if (!loc) { setFormatError(message); return; }
+    if (!loc) { setEditorError({ kind: 'format', message }); return; }
     const snippet = buildSnippet(value, loc.lineStart, loc.lineEnd, loc.caret);
-    setFormatError(`${message}\nNear (line ${loc.line}): ${snippet}`);
+    setEditorError({ kind: 'format', message: `${message}\nNear (line ${loc.line}): ${snippet}` });
     selectErrorLine(loc.lineStart, loc.lineEnd);
   };
 
@@ -258,9 +258,9 @@ export function QueryEditor({
     if (isMql && value.trim()) {
       try {
         JSON.parse(value);
-        setFormatError(null);
+        setEditorError(null);
       } catch (err) {
-        setFormatError(err instanceof Error ? err.message : String(err));
+        setEditorError({ kind: 'run', message: err instanceof Error ? err.message : String(err) });
         return;
       }
     }
@@ -587,9 +587,10 @@ export function QueryEditor({
           </span>
         </div>
       )}
-      {formatError && (() => {
-        const [headline, ...rest] = formatError.split('\n');
+      {editorError && (() => {
+        const [headline, ...rest] = editorError.message.split('\n');
         const nearLine = rest.find(l => l.startsWith('Near'));
+        const prefix = editorError.kind === 'run' ? 'Parse failed' : 'Format failed';
         return (
         <div
           role="alert"
@@ -605,7 +606,7 @@ export function QueryEditor({
           }}
         >
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
-            <span>Format failed: {headline}</span>
+            <span>{prefix}: {headline}</span>
             {nearLine && (
               <span style={{ fontFamily: '"JetBrains Mono", monospace', color: t.textSecondary, fontSize: 10.5 }}>
                 {nearLine}
@@ -613,7 +614,7 @@ export function QueryEditor({
             )}
           </div>
           <button
-            onClick={() => setFormatError(null)}
+            onClick={() => setEditorError(null)}
             aria-label="Dismiss"
             style={{
               background: 'none', border: 'none', color: t.textMuted,
@@ -651,7 +652,24 @@ export function QueryEditor({
                     { collection: name, operation: 'find', filter: {}, limit: 100 },
                     null, 2,
                   );
-                  onChange(snippet);
+                  if (!value.trim()) {
+                    onChange(snippet);
+                  } else {
+                    const el = textareaRef.current;
+                    const start = el?.selectionStart ?? value.length;
+                    const end = el?.selectionEnd ?? value.length;
+                    const next = value.substring(0, start) + snippet + value.substring(end);
+                    onChange(next);
+                    requestAnimationFrame(() => {
+                      const node = textareaRef.current;
+                      if (!node) return;
+                      node.focus();
+                      const caret = start + snippet.length;
+                      node.setSelectionRange(caret, caret);
+                    });
+                  }
+                  // Reset the select so the same option can be picked again.
+                  e.target.value = '';
                 }}
                 style={{
                   background: t.bgBase, color: t.textPrimary,
@@ -677,7 +695,10 @@ export function QueryEditor({
         <textarea
           ref={textareaRef}
           value={value}
-          onChange={e => onChange(e.target.value)}
+          onChange={e => {
+            if (editorError) setEditorError(null);
+            onChange(e.target.value);
+          }}
           onKeyDown={handleKeyDown}
           style={s.textarea}
           spellCheck={false}
