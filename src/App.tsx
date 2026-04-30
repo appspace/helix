@@ -119,6 +119,7 @@ export default function App() {
           ssl: form.ssl,
           sslVerify: form.sslVerify,
           savePassword: form.savePassword,
+          ...(form.connectionString ? { connectionString: form.connectionString } : {}),
         });
         if (electronAPI) {
           if (form.savePassword && form.password) {

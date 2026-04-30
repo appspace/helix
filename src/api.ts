@@ -54,7 +54,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  connect(form: { type: 'mysql' | 'postgres'; host: string; port: string; user: string; password: string; database: string; ssl: boolean; sslVerify: boolean }) {
+  connect(form: { type: 'mysql' | 'postgres'; host: string; port: string; user: string; password: string; database: string; ssl: boolean; sslVerify: boolean; connectionString?: string }) {
     const { ssl, sslVerify, ...rest } = form;
     const sslMode = !ssl ? undefined : sslVerify ? 'verify-full' : 'require';
     return request<{ ok: boolean; connectionName: string }>('/api/connect', {

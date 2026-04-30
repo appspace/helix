@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import type { CSSProperties } from 'react';
 import type { Theme } from '../theme';
 import { api } from '../api';
@@ -18,6 +18,10 @@ export interface ConnectionForm {
   // Only meaningful in Electron — when true, the password is persisted via
   // safeStorage and reloaded the next time this connection is opened.
   savePassword: boolean;
+  // Opaque pass-through for mongodb-only entries — carried from a saved entry
+  // so re-save round-trips it. Not editable in this form; #113 will replace
+  // this with a real mongodb form and remove this field.
+  connectionString?: string;
 }
 
 interface ConnectionManagerProps {
@@ -30,9 +34,20 @@ interface ConnectionManagerProps {
 
 export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t }: ConnectionManagerProps) {
   const [saved, setSaved] = useState<SavedConnection[]>(() => listSavedConnections());
-  const formType = (t: SavedConnection['type']): 'mysql' | 'postgres' => t === 'postgres' ? 'postgres' : 'mysql';
+  // Carries opaque mongodb connectionStrings from saved entries through the form
+  // so re-save preserves them. Keyed by connection name.
+  const connectionStringsRef = useRef<Map<string, string>>(new Map());
+  const formType = (saved: SavedConnection['type']): 'mysql' | 'postgres' => {
+    switch (saved) {
+      case 'postgres': return 'postgres';
+      case 'mysql':
+      case 'mongodb':
+      case undefined:
+        return 'mysql';
+    }
+  };
   const initialForm: ConnectionForm = saved[0]
-    ? { ...saved[0], type: formType(saved[0].type), password: '', sslVerify: saved[0].sslVerify ?? false, savePassword: saved[0].savePassword ?? false }
+    ? { ...saved[0], type: formType(saved[0].type), password: '', sslVerify: saved[0].sslVerify ?? false, savePassword: saved[0].savePassword ?? false, connectionString: saved[0].connectionString }
     : {
         name: 'Local MySQL',
         type: 'mysql',
@@ -42,6 +57,12 @@ export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t
         password: '', database: '', ssl: false, sslVerify: true, savePassword: false,
       };
   const [form, setForm] = useState<ConnectionForm>(initialForm);
+  // Seed the carry-forward map from any saved entry that already has a connectionString.
+  if (connectionStringsRef.current.size === 0) {
+    for (const entry of saved) {
+      if (entry.connectionString) connectionStringsRef.current.set(entry.name, entry.connectionString);
+    }
+  }
   // Track the saved entry currently reflected in the form, so we only auto-populate once per match.
   const [appliedSaved, setAppliedSaved] = useState<string>(saved[0]?.name ?? '');
   const [suggestOpen, setSuggestOpen] = useState(false);
@@ -111,7 +132,8 @@ export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t
   };
 
   const applySaved = (entry: SavedConnection) => {
-    setForm({ ...entry, type: formType(entry.type), password: '', sslVerify: entry.sslVerify ?? false, savePassword: entry.savePassword ?? false });
+    if (entry.connectionString) connectionStringsRef.current.set(entry.name, entry.connectionString);
+    setForm({ ...entry, type: formType(entry.type), password: '', sslVerify: entry.sslVerify ?? false, savePassword: entry.savePassword ?? false, connectionString: entry.connectionString });
     setAppliedSaved(entry.name);
     setSuggestOpen(false);
     if (entry.savePassword && electronAPI) {
@@ -182,7 +204,12 @@ export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t
         </div>
 
         <form
-          onSubmit={(e) => { e.preventDefault(); if (!isConnecting) onConnect(form); }}
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (isConnecting) return;
+            const carried = connectionStringsRef.current.get(form.name.trim());
+            onConnect(carried ? { ...form, connectionString: carried } : form);
+          }}
           autoComplete="on"
         >
           <div style={s.body}>
@@ -268,7 +295,11 @@ export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t
                             <div style={{ minWidth: 0 }}>
                               <div style={{ fontSize: 12, color: t.textPrimary, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</div>
                               <div style={{ fontSize: 11, color: t.textMuted, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                {c.user}@{c.host}:{c.port}
+                                {(c.user || c.host || c.port)
+                                  ? <>{c.user}@{c.host}:{c.port}</>
+                                  : c.connectionString
+                                    ? <>{(() => { try { return new URL(c.connectionString!).host || c.connectionString; } catch { return c.connectionString; } })()}</>
+                                    : null}
                                 {c.database && <span style={{ marginLeft: 6 }}>· {c.database}</span>}
                                 {c.ssl && <span style={{ marginLeft: 6, color: t.accent }}>· SSL</span>}
                               </div>
