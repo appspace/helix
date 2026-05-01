@@ -38,6 +38,13 @@ interface MqlRequest {
 
 const SYSTEM_DBS = new Set(['admin', 'local', 'config']);
 
+// 50 docs is a compromise between schema coverage and per-collection latency
+// during getSchema (which fans out across every collection in the database).
+// We sort by `{_id: -1}` so the sample is deterministic and biased toward
+// recent writes — newer fields in evolving collections are more likely to
+// surface than if we picked an arbitrary natural-order page.
+const SAMPLE_SIZE = 50;
+
 function buildMongoUri(config: ConnectionConfig): string {
   if (config.connectionString) return config.connectionString;
   const user = config.user ?? '';
@@ -357,21 +364,18 @@ export class MongoDBDriver implements DbDriver {
     const baseCollections = collections.filter((c) => c.type !== 'view');
     const views = collections.filter((c) => c.type === 'view').map((c) => c.name);
 
-    // Best-effort field inference: we sample a single document and mark every
-    // column inferred:true. Fields that appear only on later documents are
-    // invisible to this pass. Tracked in #118 (union-of-keys sampling).
     const tables: TableInfo[] = await Promise.all(
       baseCollections.map(async (c) => {
         const coll = db.collection(c.name);
-        const [sample, count] = await Promise.all([
-          coll.findOne({}),
+        const [docs, count] = await Promise.all([
+          this.sampleDocs(coll),
           coll.estimatedDocumentCount().catch(() => 0),
         ]);
         return {
           name: c.name,
           rows: count,
           comment: '',
-          columns: this.inferColumns(sample),
+          columns: this.inferColumnsFromSample(docs),
         };
       }),
     );
@@ -390,20 +394,24 @@ export class MongoDBDriver implements DbDriver {
     const list = await db.listCollections({ name: table }, { nameOnly: false }).toArray();
     if (list.length === 0) return null;
     const coll = db.collection(table);
-    const [sample, count] = await Promise.all([
-      coll.findOne({}),
+    const [docs, count] = await Promise.all([
+      this.sampleDocs(coll),
       coll.estimatedDocumentCount().catch(() => 0),
     ]);
     return {
       name: table,
       rows: count,
       comment: '',
-      columns: this.inferColumns(sample),
+      columns: this.inferColumnsFromSample(docs),
     };
   }
 
-  private inferColumns(sample: Document | null): ColumnInfo[] {
-    if (!sample) {
+  private async sampleDocs(coll: ReturnType<Db['collection']>): Promise<Document[]> {
+    return coll.find({}).sort({ _id: -1 }).limit(SAMPLE_SIZE).toArray();
+  }
+
+  private inferColumnsFromSample(docs: Document[]): ColumnInfo[] {
+    if (docs.length === 0) {
       return [
         {
           name: '_id', type: 'objectId', dataType: 'objectId',
@@ -412,17 +420,56 @@ export class MongoDBDriver implements DbDriver {
         },
       ];
     }
-    return Object.keys(sample).map((name) => {
-      const dataType = inferDataType(sample[name]);
+
+    // Track first-seen order so the column list is stable, and per-type counts
+    // so we can pick the dominant dataType while surfacing conflicts.
+    const order: string[] = [];
+    const seen = new Set<string>();
+    const presence = new Map<string, number>();
+    const typeCounts = new Map<string, Map<string, number>>();
+    const typeOrder = new Map<string, string[]>();
+
+    for (const doc of docs) {
+      for (const name of Object.keys(doc)) {
+        if (!seen.has(name)) {
+          seen.add(name);
+          order.push(name);
+          typeCounts.set(name, new Map());
+          typeOrder.set(name, []);
+        }
+        presence.set(name, (presence.get(name) ?? 0) + 1);
+        const t = inferDataType(doc[name]);
+        const counts = typeCounts.get(name)!;
+        if (!counts.has(t)) typeOrder.get(name)!.push(t);
+        counts.set(t, (counts.get(t) ?? 0) + 1);
+      }
+    }
+
+    return order.map((name) => {
+      const counts = typeCounts.get(name)!;
+      const firstSeen = typeOrder.get(name)!;
+      // Most-frequent type wins; ties broken by first-seen order.
+      let dataType = firstSeen[0];
+      let best = counts.get(dataType)!;
+      for (const t of firstSeen) {
+        const c = counts.get(t)!;
+        if (c > best) {
+          best = c;
+          dataType = t;
+        }
+      }
+      const comment =
+        firstSeen.length > 1 ? `types: ${firstSeen.join(', ')}` : '';
+      const isId = name === '_id';
       return {
         name,
         type: dataType,
         dataType,
-        pk: name === '_id',
-        nullable: name !== '_id',
+        pk: isId,
+        nullable: isId ? false : (presence.get(name)! < docs.length),
         default: null,
         autoIncrement: false,
-        comment: '',
+        comment,
         inferred: true,
       };
     });
