@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import type { CSSProperties, MutableRefObject } from 'react';
 import type { Theme } from '../theme';
 import type { ColumnMeta, SchemaData } from '../api';
@@ -97,7 +97,9 @@ function cellDisplayValue(val: RawCellValue, meta: ColumnMeta | undefined, schem
   if (val === null || val === undefined) return '';
   if (isBoolColumn(schemaData, meta)) return val === 1 || val === true ? 'true' : 'false';
   if (typeof val === 'object') {
-    try { return JSON.stringify(val); } catch { return String(val); }
+    // Match the modal's "Copy JSON" output so Ctrl+C / right-click Copy on
+    // a complex cell yields pretty-printed JSON rather than a single line.
+    try { return JSON.stringify(val, null, 2); } catch { return String(val); }
   }
   return String(val);
 }
@@ -134,25 +136,31 @@ function flattenRowsForDisplay(
   columns: string[],
   rows: Record<string, RawCellValue>[],
 ): FlattenedResult {
-  // First pass: decide which top-level columns hold an object on at least one
-  // row. Those columns get expanded to `parent.child` columns. Arrays stay put
-  // (heterogeneous shapes don't flatten cleanly), as do columns whose values
-  // are always primitive.
+  // First pass: a column expands only when *every* non-null occurrence is a
+  // plain object. Mixing shapes (e.g. some rows have `{city,zip}` and others
+  // have a string `'123 Main St'`) would silently drop the non-object rows
+  // into a synthetic child column, corrupting the data — keep those columns
+  // intact and let `ComplexCellPreview` render the object rows as JSON.
   const expandTargets = new Set<string>();
   const childKeyOrder = new Map<string, string[]>();
   for (const col of columns) {
     const seenChildren: string[] = [];
     let everObject = false;
+    let mixed = false;
     for (const r of rows) {
       const v = r[col];
+      if (v === null || v === undefined) continue;
       if (isPlainObject(v)) {
         everObject = true;
         for (const k of Object.keys(v)) {
           if (!seenChildren.includes(k)) seenChildren.push(k);
         }
+      } else {
+        mixed = true;
+        break;
       }
     }
-    if (everObject) {
+    if (everObject && !mixed) {
       expandTargets.add(col);
       childKeyOrder.set(col, seenChildren);
     }
@@ -180,14 +188,9 @@ function flattenRowsForDisplay(
             out[`${col}.${child}`] = (v[child] ?? null) as RawCellValue;
           }
         } else {
-          // Row didn't have an object at this column — fill children with null
-          // (or carry the non-object value into the first child if it exists).
+          // Gate guarantees every non-null value is a plain object, so this
+          // row simply lacked the parent — fill with nulls.
           for (const child of children) out[`${col}.${child}`] = null;
-          if (v !== undefined && v !== null) {
-            // Preserve the unexpected value on the first synthetic child so
-            // it isn't silently dropped from the grid.
-            out[`${col}.${children[0]}`] = v;
-          }
         }
       } else {
         out[col] = r[col] ?? null;
@@ -428,13 +431,13 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
   };
 
   // Result set after one-level flattening of nested documents (no-op for SQL).
-  // Memoised by `results` identity since the parent always replaces `results`
-  // wholesale on a new query.
-  const flattened = (() => {
+  // Keyed on `results` identity — the parent replaces `results` wholesale on
+  // a new query, so reference equality is sufficient.
+  const flattened = useMemo(() => {
     if (!results) return null;
     if (!hasNesting(results.rows)) return { columns: results.columns, rows: results.rows };
     return flattenRowsForDisplay(results.columns, results.rows);
-  })();
+  }, [results]);
 
   // Sync column order/widths when the result set changes
   useEffect(() => {
@@ -808,6 +811,9 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
               break;
             }
             case 'Escape': {
+              // Modal Esc handler runs first; let it close the modal without
+              // also clearing the underlying cell selection.
+              if (expandedCell) break;
               setSelectedRow(null);
               setSelectedCol(null);
               break;
@@ -953,7 +959,6 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
                       onClick={(e) => {
                         e.stopPropagation();
                         setSelectedRow(i); setSelectedCol(colIdx); tableWrapRef.current?.focus();
-                        if (complex) setExpandedCell({ col, value: cellVal });
                       }}
                       onContextMenu={(e) => {
                         e.preventDefault();
@@ -966,7 +971,6 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
                         ...cellStyle(cellVal),
                         padding: isEditing ? 0 : undefined,
                         ...(isFocusedCell ? { boxShadow: `inset 0 0 0 2px ${t.accent}` } : {}),
-                        ...(complex ? { cursor: 'zoom-in' } : {}),
                       }}
                       onDoubleClick={(e) => {
                         if (!editable || !meta) return;
@@ -1046,7 +1050,7 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
                         cellVal === null
                           ? <em>NULL</em>
                           : complex
-                            ? <ComplexCellPreview t={t} value={cellVal} maxWidthPx={colWidths[col] ?? DEFAULT_MAX_COL_WIDTH} />
+                            ? <ComplexCellPreview t={t} value={cellVal} maxWidthPx={colWidths[col] ?? DEFAULT_MAX_COL_WIDTH} onExpand={() => setExpandedCell({ col, value: cellVal })} />
                             : isBoolColumn(schemaData, meta)
                               ? (cellVal === 1 || cellVal === true ? 'true' : 'false')
                               : truncateMiddleToWidth(String(cellVal), colWidths[col] ?? DEFAULT_MAX_COL_WIDTH)
@@ -1379,21 +1383,34 @@ interface ComplexCellPreviewProps {
   t: Theme;
   value: unknown[] | Record<string, unknown>;
   maxWidthPx: number;
+  onExpand: () => void;
 }
 
-function ComplexCellPreview({ t, value, maxWidthPx }: ComplexCellPreviewProps) {
+function ComplexCellPreview({ t, value, maxWidthPx, onExpand }: ComplexCellPreviewProps) {
   // Char budget mirrors `truncateMiddleToWidth` so the preview takes ~the same
-  // space as a plain string of equal width. The hint icon signals the cell is
-  // expandable; click is wired by the parent <td>.
+  // space as a plain string of equal width. The icon is the only affordance
+  // that opens the modal — clicking elsewhere on the cell selects it.
   const charBudget = Math.max(8, Math.floor((maxWidthPx - CELL_PADDING_X) / monoCharWidth()) - 2);
   const preview = jsonPreview(value, charBudget);
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
       <span style={{ color: t.textSecondary }}>{preview}</span>
-      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke={t.textMuted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }} aria-hidden>
-        <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/>
-        <line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
-      </svg>
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); onExpand(); }}
+        title="Expand"
+        aria-label="Expand"
+        style={{
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          padding: 0, margin: 0, border: 'none', background: 'transparent',
+          color: t.textMuted, cursor: 'zoom-in', flexShrink: 0,
+        }}
+      >
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/>
+          <line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
+        </svg>
+      </button>
     </span>
   );
 }
