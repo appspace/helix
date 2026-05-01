@@ -273,6 +273,102 @@ describe('MongoDBDriver.query – find', () => {
   });
 });
 
+describe('MongoDBDriver.query – BSON scalar serialization', () => {
+  it('serializes Decimal128 to its numeric string (positive, negative, zero, negative zero)', async () => {
+    const dec = (s: string) => ({ _bsontype: 'Decimal128', toString: () => s });
+    mockCursor.toArray.mockResolvedValueOnce([
+      {
+        a: dec('123.45'),
+        b: dec('-987654321.0000001'),
+        c: dec('0'),
+        // bson preserves Decimal128's IEEE-754 sign bit, so '-0' is a real
+        // value distinct from '0' (mongosh / Compass render it as '-0').
+        nz: dec('-0'),
+      },
+    ]);
+    const r = await makeDriver().query(
+      JSON.stringify({ collection: 'c', operation: 'find' }),
+    );
+    expect(r.rows[0]).toEqual({
+      a: '123.45',
+      b: '-987654321.0000001',
+      c: '0',
+      nz: '-0',
+    });
+  });
+
+  it('serializes Long to its string form (preserves precision past Number.MAX_SAFE_INTEGER)', async () => {
+    const long = (s: string) => ({ _bsontype: 'Long', toString: () => s });
+    mockCursor.toArray.mockResolvedValueOnce([
+      { big: long('9007199254740993'), max: long('9223372036854775807') },
+    ]);
+    const r = await makeDriver().query(
+      JSON.stringify({ collection: 'c', operation: 'find' }),
+    );
+    expect(r.rows[0]).toEqual({
+      big: '9007199254740993',
+      max: '9223372036854775807',
+    });
+  });
+
+  it('serializes Binary subtype 4 (UUID) to canonical UUID string via toUUID()', async () => {
+    const uuidStr = '550e8400-e29b-41d4-a716-446655440000';
+    const bin = {
+      _bsontype: 'Binary',
+      sub_type: 4,
+      buffer: Buffer.from(uuidStr.replace(/-/g, ''), 'hex'),
+      toUUID: () => ({ toString: () => uuidStr }),
+    };
+    mockCursor.toArray.mockResolvedValueOnce([{ id: bin }]);
+    const r = await makeDriver().query(
+      JSON.stringify({ collection: 'c', operation: 'find' }),
+    );
+    expect(r.rows[0]).toEqual({ id: uuidStr });
+  });
+
+  it('serializes generic Binary as Binary(subType,base64) and handles empty buffer', async () => {
+    const bin = (sub: number, buf: Buffer) => ({
+      _bsontype: 'Binary',
+      sub_type: sub,
+      buffer: buf,
+    });
+    mockCursor.toArray.mockResolvedValueOnce([
+      { hello: bin(0, Buffer.from('hello')), empty: bin(0, Buffer.alloc(0)) },
+    ]);
+    const r = await makeDriver().query(
+      JSON.stringify({ collection: 'c', operation: 'find' }),
+    );
+    expect(r.rows[0]).toEqual({
+      hello: 'Binary(0,aGVsbG8=)',
+      empty: 'Binary(0,<empty>)',
+    });
+  });
+
+  it('serializes Timestamp as Timestamp(t, i)', async () => {
+    const ts = { _bsontype: 'Timestamp', t: 1234567890, i: 1 };
+    mockCursor.toArray.mockResolvedValueOnce([{ ts }]);
+    const r = await makeDriver().query(
+      JSON.stringify({ collection: 'c', operation: 'find' }),
+    );
+    expect(r.rows[0]).toEqual({ ts: 'Timestamp(1234567890, 1)' });
+  });
+
+  it('serializes BSON scalars nested inside arrays and sub-documents', async () => {
+    const dec = { _bsontype: 'Decimal128', toString: () => '1.5' };
+    const long = { _bsontype: 'Long', toString: () => '42' };
+    mockCursor.toArray.mockResolvedValueOnce([
+      { items: [{ price: dec }], stats: { count: long } },
+    ]);
+    const r = await makeDriver().query(
+      JSON.stringify({ collection: 'c', operation: 'find' }),
+    );
+    expect(r.rows[0]).toEqual({
+      items: [{ price: '1.5' }],
+      stats: { count: '42' },
+    });
+  });
+});
+
 describe('MongoDBDriver.query – findOne / aggregate / count', () => {
   it('findOne returns at most one row', async () => {
     mockCollection.findOne.mockResolvedValueOnce({ name: 'Bob' });

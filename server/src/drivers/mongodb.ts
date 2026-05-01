@@ -49,6 +49,36 @@ function buildMongoUri(config: ConnectionConfig): string {
   return `mongodb://${auth}${config.host}:${config.port}/`;
 }
 
+// Detect bson scalar types via their `_bsontype` tag. We avoid `instanceof`
+// here because users may bring their own `bson` build (e.g. a transitive
+// duplicate), which breaks prototype-chain checks; the `_bsontype` getter is
+// the project's documented identity marker.
+function bsonType(val: unknown): string | null {
+  if (val === null || typeof val !== 'object') return null;
+  const t = (val as { _bsontype?: unknown })._bsontype;
+  return typeof t === 'string' ? t : null;
+}
+
+function serializeBinary(val: {
+  sub_type: number;
+  buffer: Buffer | Uint8Array;
+  toUUID?: () => { toString(): string };
+}): string {
+  // Subtype 4 is the canonical UUID; render the hyphenated form. Subtype 3
+  // (legacy UUID) has non-canonical, driver-specific byte order, so calling
+  // toUUID() on it would silently produce a wrong-looking string — we leave
+  // legacy UUIDs in the generic Binary(3,<base64>) form.
+  if (val.sub_type === 4 && typeof val.toUUID === 'function') {
+    return val.toUUID().toString();
+  }
+  const buf = Buffer.isBuffer(val.buffer) ? val.buffer : Buffer.from(val.buffer);
+  const b64 = buf.toString('base64');
+  // Use an explicit empty marker so an empty buffer doesn't render as the
+  // ambiguous `Binary(0,)` (which reads like a malformed function call).
+  const payload = b64.length === 0 ? '<empty>' : b64;
+  return `Binary(${val.sub_type},${payload})`;
+}
+
 function serializeValue(val: unknown): unknown {
   if (val === null || val === undefined) return null;
   if (val instanceof ObjectId) return val.toHexString();
@@ -59,6 +89,22 @@ function serializeValue(val: unknown): unknown {
     return val.toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '');
   }
   if (Buffer.isBuffer(val)) return val.toString('hex');
+  const tag = bsonType(val);
+  if (tag) {
+    // MUST come before Long — Timestamp extends Long in bson 7.x; reordering
+    // (or sorting these branches alphabetically in a refactor) would silently
+    // match Timestamp here and lose the (t, i) tuple.
+    if (tag === 'Timestamp') {
+      const ts = val as { t: number; i: number };
+      return `Timestamp(${ts.t}, ${ts.i})`;
+    }
+    if (tag === 'Decimal128' || tag === 'Long') {
+      return (val as { toString(): string }).toString();
+    }
+    if (tag === 'Binary') {
+      return serializeBinary(val as Parameters<typeof serializeBinary>[0]);
+    }
+  }
   if (Array.isArray(val)) return val.map(serializeValue);
   if (typeof val === 'bigint') return val.toString();
   if (typeof val === 'object') {
