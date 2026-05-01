@@ -64,12 +64,19 @@ function serializeBinary(val: {
   buffer: Buffer | Uint8Array;
   toUUID?: () => { toString(): string };
 }): string {
-  // Subtype 4 (and the legacy 3) are UUIDs; render canonical hyphenated form.
+  // Subtype 4 is the canonical UUID; render the hyphenated form. Subtype 3
+  // (legacy UUID) has non-canonical, driver-specific byte order, so calling
+  // toUUID() on it would silently produce a wrong-looking string — we leave
+  // legacy UUIDs in the generic Binary(3,<base64>) form.
   if (val.sub_type === 4 && typeof val.toUUID === 'function') {
     return val.toUUID().toString();
   }
   const buf = Buffer.isBuffer(val.buffer) ? val.buffer : Buffer.from(val.buffer);
-  return `Binary(${val.sub_type},${buf.toString('base64')})`;
+  const b64 = buf.toString('base64');
+  // Use an explicit empty marker so an empty buffer doesn't render as the
+  // ambiguous `Binary(0,)` (which reads like a malformed function call).
+  const payload = b64.length === 0 ? '<empty>' : b64;
+  return `Binary(${val.sub_type},${payload})`;
 }
 
 function serializeValue(val: unknown): unknown {
@@ -84,7 +91,9 @@ function serializeValue(val: unknown): unknown {
   if (Buffer.isBuffer(val)) return val.toString('hex');
   const tag = bsonType(val);
   if (tag) {
-    // Order matters: Timestamp extends Long, so check it first.
+    // MUST come before Long — Timestamp extends Long in bson 7.x; reordering
+    // (or sorting these branches alphabetically in a refactor) would silently
+    // match Timestamp here and lose the (t, i) tuple.
     if (tag === 'Timestamp') {
       const ts = val as { t: number; i: number };
       return `Timestamp(${ts.t}, ${ts.i})`;

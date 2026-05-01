@@ -274,15 +274,27 @@ describe('MongoDBDriver.query – find', () => {
 });
 
 describe('MongoDBDriver.query – BSON scalar serialization', () => {
-  it('serializes Decimal128 to its numeric string (positive, negative, zero)', async () => {
+  it('serializes Decimal128 to its numeric string (positive, negative, zero, negative zero)', async () => {
     const dec = (s: string) => ({ _bsontype: 'Decimal128', toString: () => s });
     mockCursor.toArray.mockResolvedValueOnce([
-      { a: dec('123.45'), b: dec('-987654321.0000001'), c: dec('0') },
+      {
+        a: dec('123.45'),
+        b: dec('-987654321.0000001'),
+        c: dec('0'),
+        // bson preserves Decimal128's IEEE-754 sign bit, so '-0' is a real
+        // value distinct from '0' (mongosh / Compass render it as '-0').
+        nz: dec('-0'),
+      },
     ]);
     const r = await makeDriver().query(
       JSON.stringify({ collection: 'c', operation: 'find' }),
     );
-    expect(r.rows[0]).toEqual({ a: '123.45', b: '-987654321.0000001', c: '0' });
+    expect(r.rows[0]).toEqual({
+      a: '123.45',
+      b: '-987654321.0000001',
+      c: '0',
+      nz: '-0',
+    });
   });
 
   it('serializes Long to its string form (preserves precision past Number.MAX_SAFE_INTEGER)', async () => {
@@ -328,7 +340,7 @@ describe('MongoDBDriver.query – BSON scalar serialization', () => {
     );
     expect(r.rows[0]).toEqual({
       hello: 'Binary(0,aGVsbG8=)',
-      empty: 'Binary(0,)',
+      empty: 'Binary(0,<empty>)',
     });
   });
 
