@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import type { CSSProperties } from 'react';
 import type { Theme } from '../theme';
 import { api } from '../api';
@@ -105,6 +105,11 @@ export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t
   const [testResult, setTestResult] = useState<{ ok: true } | { ok: false; error: string } | null>(null);
   const [canSavePassword, setCanSavePassword] = useState(false);
 
+  // Track whether a click began on the backdrop. Only dismiss when both mousedown
+  // and click landed on the backdrop — a drag that starts inside the modal and
+  // releases on the backdrop (e.g. text-selection) must not close the modal.
+  const mouseDownOnBackdrop = useRef(false);
+
   useEffect(() => {
     let cancelled = false;
     electronAPI?.passwords.available().then(ok => { if (!cancelled) setCanSavePassword(ok); }).catch(() => {});
@@ -125,13 +130,6 @@ export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t
   // that was active when the modal opened, not on every re-render.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  useEffect(() => {
-    if (!onDismiss || isConnecting) return;
-    const key = (e: KeyboardEvent) => { if (e.key === 'Escape') onDismiss(); };
-    window.addEventListener('keydown', key);
-    return () => window.removeEventListener('keydown', key);
-  }, [onDismiss, isConnecting]);
 
   const isMongoUri = form.type === 'mongodb' && form.mongoMode === 'uri';
 
@@ -247,8 +245,18 @@ export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t
   });
 
   return (
-    <div style={s.overlay} onClick={!isConnecting ? onDismiss : undefined}>
-      <div style={s.modal} onClick={(e) => e.stopPropagation()}>
+    <div
+      style={s.overlay}
+      onMouseDown={(e) => { mouseDownOnBackdrop.current = e.target === e.currentTarget; }}
+      onMouseUp={(e) => { if (e.target !== e.currentTarget) mouseDownOnBackdrop.current = false; }}
+      onClick={(e) => {
+        const started = mouseDownOnBackdrop.current;
+        mouseDownOnBackdrop.current = false;
+        if (!onDismiss || isConnecting) return;
+        if (started && e.target === e.currentTarget) onDismiss();
+      }}
+    >
+      <div style={s.modal}>
         <div style={s.header}>
           <svg width="20" height="20" viewBox="0 0 40 40" fill="none">
             <path d="M6 6 C6 6, 20 2, 20 20 C20 38, 6 34, 6 34" stroke={t.accent} strokeWidth="2.5" strokeLinecap="round"/>
