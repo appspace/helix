@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import type { CSSProperties } from 'react';
 import type { Theme } from '../theme';
 import { api } from '../api';
@@ -104,6 +104,11 @@ export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: true } | { ok: false; error: string } | null>(null);
   const [canSavePassword, setCanSavePassword] = useState(false);
+
+  // Track whether a click began on the backdrop. Only dismiss when both mousedown
+  // and click landed on the backdrop — a drag that starts inside the modal and
+  // releases on the backdrop (e.g. text-selection) must not close the modal.
+  const mouseDownOnBackdrop = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -240,7 +245,17 @@ export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t
   });
 
   return (
-    <div style={s.overlay}>
+    <div
+      style={s.overlay}
+      onMouseDown={(e) => { mouseDownOnBackdrop.current = e.target === e.currentTarget; }}
+      onMouseUp={(e) => { if (e.target !== e.currentTarget) mouseDownOnBackdrop.current = false; }}
+      onClick={(e) => {
+        const started = mouseDownOnBackdrop.current;
+        mouseDownOnBackdrop.current = false;
+        if (!onDismiss || isConnecting) return;
+        if (started && e.target === e.currentTarget) onDismiss();
+      }}
+    >
       <div style={s.modal}>
         <div style={s.header}>
           <svg width="20" height="20" viewBox="0 0 40 40" fill="none">
