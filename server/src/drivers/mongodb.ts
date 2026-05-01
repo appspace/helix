@@ -49,6 +49,29 @@ function buildMongoUri(config: ConnectionConfig): string {
   return `mongodb://${auth}${config.host}:${config.port}/`;
 }
 
+// Detect bson scalar types via their `_bsontype` tag. We avoid `instanceof`
+// here because users may bring their own `bson` build (e.g. a transitive
+// duplicate), which breaks prototype-chain checks; the `_bsontype` getter is
+// the project's documented identity marker.
+function bsonType(val: unknown): string | null {
+  if (val === null || typeof val !== 'object') return null;
+  const t = (val as { _bsontype?: unknown })._bsontype;
+  return typeof t === 'string' ? t : null;
+}
+
+function serializeBinary(val: {
+  sub_type: number;
+  buffer: Buffer | Uint8Array;
+  toUUID?: () => { toString(): string };
+}): string {
+  // Subtype 4 (and the legacy 3) are UUIDs; render canonical hyphenated form.
+  if (val.sub_type === 4 && typeof val.toUUID === 'function') {
+    return val.toUUID().toString();
+  }
+  const buf = Buffer.isBuffer(val.buffer) ? val.buffer : Buffer.from(val.buffer);
+  return `Binary(${val.sub_type},${buf.toString('base64')})`;
+}
+
 function serializeValue(val: unknown): unknown {
   if (val === null || val === undefined) return null;
   if (val instanceof ObjectId) return val.toHexString();
@@ -59,6 +82,20 @@ function serializeValue(val: unknown): unknown {
     return val.toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '');
   }
   if (Buffer.isBuffer(val)) return val.toString('hex');
+  const tag = bsonType(val);
+  if (tag) {
+    // Order matters: Timestamp extends Long, so check it first.
+    if (tag === 'Timestamp') {
+      const ts = val as { t: number; i: number };
+      return `Timestamp(${ts.t}, ${ts.i})`;
+    }
+    if (tag === 'Decimal128' || tag === 'Long') {
+      return (val as { toString(): string }).toString();
+    }
+    if (tag === 'Binary') {
+      return serializeBinary(val as Parameters<typeof serializeBinary>[0]);
+    }
+  }
   if (Array.isArray(val)) return val.map(serializeValue);
   if (typeof val === 'bigint') return val.toString();
   if (typeof val === 'object') {
