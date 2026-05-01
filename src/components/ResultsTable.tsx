@@ -5,12 +5,24 @@ import type { ColumnMeta, SchemaData } from '../api';
 import { InsertRowDialog } from './InsertRowDialog';
 import { rowsToCsv, rowsToJson, downloadBlob, sanitizeFilename } from '../export';
 
+// MongoDB documents arrive with nested objects/arrays in cell values.
+// Other drivers always emit primitives. We type the row map permissively so
+// the same component handles both; nested values are flattened or serialised
+// for display (see `flattenRowsForDisplay`).
+export type RawCellValue = string | number | boolean | null | unknown[] | Record<string, unknown>;
+
 export interface QueryResults {
   columns: string[];
   columnMeta?: ColumnMeta[];
-  rows: Record<string, string | number | boolean | null>[];
+  rows: Record<string, RawCellValue>[];
 }
 
+// `Row` carries primitive cell values only — that is the contract with the
+// editing/CRUD callbacks (onUpdateCell / onDeleteRow / onInsertRow). For
+// MongoDB results that contain nested objects/arrays we work internally with
+// the wider `DisplayRow` (see `flattenRowsForDisplay`); editing is gated on
+// `meta.orgTable && meta.orgName`, which Mongo leaves empty, so a non-primitive
+// cell never reaches the CRUD callbacks.
 type Row = Record<string, string | number | boolean | null>;
 type CellValue = string | number | boolean | null;
 
@@ -81,10 +93,125 @@ function isBoolColumn(schemaData: SchemaData | undefined, meta: ColumnMeta | und
   return col?.type === 'tinyint(1)';
 }
 
-function cellDisplayValue(val: string | number | boolean | null, meta: ColumnMeta | undefined, schemaData: SchemaData | undefined): string {
-  if (val === null) return '';
+function cellDisplayValue(val: RawCellValue, meta: ColumnMeta | undefined, schemaData: SchemaData | undefined): string {
+  if (val === null || val === undefined) return '';
   if (isBoolColumn(schemaData, meta)) return val === 1 || val === true ? 'true' : 'false';
+  if (typeof val === 'object') {
+    try { return JSON.stringify(val); } catch { return String(val); }
+  }
   return String(val);
+}
+
+// Nested-document flattening (MongoDB).
+// SQL drivers always emit primitive cell values, so `hasNesting` returns false
+// and the original rows/columns are used unchanged — there is no behavioural
+// change for MySQL/Postgres results.
+//
+// One level of plain-object nesting is flattened: `{ address: { city, zip } }`
+// becomes columns `address.city` and `address.zip`, replacing `address`.
+// Deeper objects and arrays remain as raw values in the flattened row and are
+// rendered as truncated JSON with a click-to-expand modal.
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+function hasNesting(rows: Record<string, RawCellValue>[]): boolean {
+  for (const r of rows) {
+    for (const k in r) {
+      const v = r[k];
+      if (v !== null && typeof v === 'object') return true;
+    }
+  }
+  return false;
+}
+
+interface FlattenedResult {
+  columns: string[];
+  rows: Record<string, RawCellValue>[];
+}
+
+function flattenRowsForDisplay(
+  columns: string[],
+  rows: Record<string, RawCellValue>[],
+): FlattenedResult {
+  // First pass: decide which top-level columns hold an object on at least one
+  // row. Those columns get expanded to `parent.child` columns. Arrays stay put
+  // (heterogeneous shapes don't flatten cleanly), as do columns whose values
+  // are always primitive.
+  const expandTargets = new Set<string>();
+  const childKeyOrder = new Map<string, string[]>();
+  for (const col of columns) {
+    const seenChildren: string[] = [];
+    let everObject = false;
+    for (const r of rows) {
+      const v = r[col];
+      if (isPlainObject(v)) {
+        everObject = true;
+        for (const k of Object.keys(v)) {
+          if (!seenChildren.includes(k)) seenChildren.push(k);
+        }
+      }
+    }
+    if (everObject) {
+      expandTargets.add(col);
+      childKeyOrder.set(col, seenChildren);
+    }
+  }
+
+  if (expandTargets.size === 0) return { columns, rows };
+
+  const newColumns: string[] = [];
+  for (const col of columns) {
+    if (expandTargets.has(col)) {
+      for (const child of childKeyOrder.get(col)!) newColumns.push(`${col}.${child}`);
+    } else {
+      newColumns.push(col);
+    }
+  }
+
+  const newRows: Record<string, RawCellValue>[] = rows.map(r => {
+    const out: Record<string, RawCellValue> = {};
+    for (const col of columns) {
+      if (expandTargets.has(col)) {
+        const v = r[col];
+        const children = childKeyOrder.get(col)!;
+        if (isPlainObject(v)) {
+          for (const child of children) {
+            out[`${col}.${child}`] = (v[child] ?? null) as RawCellValue;
+          }
+        } else {
+          // Row didn't have an object at this column — fill children with null
+          // (or carry the non-object value into the first child if it exists).
+          for (const child of children) out[`${col}.${child}`] = null;
+          if (v !== undefined && v !== null) {
+            // Preserve the unexpected value on the first synthetic child so
+            // it isn't silently dropped from the grid.
+            out[`${col}.${children[0]}`] = v;
+          }
+        }
+      } else {
+        out[col] = r[col] ?? null;
+      }
+    }
+    return out;
+  });
+
+  return { columns: newColumns, rows: newRows };
+}
+
+function isComplexValue(v: RawCellValue): v is unknown[] | Record<string, unknown> {
+  return v !== null && typeof v === 'object';
+}
+
+function jsonPreview(v: unknown, max: number): string {
+  let s: string;
+  try {
+    s = JSON.stringify(v);
+  } catch {
+    s = String(v);
+  }
+  if (s.length <= max) return s;
+  return s.slice(0, max - 1) + '…';
 }
 
 // Long values blow out column widths and force users to scroll. We truncate
@@ -190,6 +317,8 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
   const [filterOpen, setFilterOpen] = useState(false);
   const [filterText, setFilterText] = useState('');
   const filterInputRef = useRef<HTMLInputElement | null>(null);
+  // Full-cell viewer for nested objects/arrays from MongoDB documents.
+  const [expandedCell, setExpandedCell] = useState<{ col: string; value: RawCellValue } | null>(null);
 
   // Column layout: order and widths
   const [colOrder, setColOrder] = useState<string[]>([]);
@@ -275,6 +404,16 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
     if (filterOpen) { filterInputRef.current?.focus(); filterInputRef.current?.select(); }
   }, [filterOpen]);
 
+  // Esc closes the expanded-cell viewer.
+  useEffect(() => {
+    if (!expandedCell) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.preventDefault(); setExpandedCell(null); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [expandedCell]);
+
   // Persist layout only when the result comes from a single identifiable table
   const persistKey = (() => {
     if (!activeSchema || !results?.columnMeta?.length) return null;
@@ -288,10 +427,19 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
     try { localStorage.setItem(persistKey, JSON.stringify({ order, widths })); } catch {}
   };
 
+  // Result set after one-level flattening of nested documents (no-op for SQL).
+  // Memoised by `results` identity since the parent always replaces `results`
+  // wholesale on a new query.
+  const flattened = (() => {
+    if (!results) return null;
+    if (!hasNesting(results.rows)) return { columns: results.columns, rows: results.rows };
+    return flattenRowsForDisplay(results.columns, results.rows);
+  })();
+
   // Sync column order/widths when the result set changes
   useEffect(() => {
-    if (!results) { setColOrder([]); setColWidths({}); return; }
-    const cols = results.columns;
+    if (!flattened) { setColOrder([]); setColWidths({}); return; }
+    const cols = flattened.columns;
     let order = cols;
     let widths: Record<string, number> = {};
     if (persistKey) {
@@ -330,7 +478,7 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
 
   // Columns in their current display order
   const displayCols = (() => {
-    const cols = results?.columns ?? [];
+    const cols = flattened?.columns ?? [];
     if (colOrder.length === 0) return cols;
     const set = new Set(cols);
     const known = colOrder.filter(c => set.has(c));
@@ -360,7 +508,7 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
     else { setSortCol(col); setSortDir('asc'); }
   };
 
-  const cellStyle = (val: string | number | boolean | null): CSSProperties => {
+  const cellStyle = (val: RawCellValue): CSSProperties => {
     if (val === null) return { ...s.td, color: t.textMuted, fontStyle: 'italic' };
     if (typeof val === 'number') return { ...s.td, color: t.sqlNumber };
     if (typeof val === 'string' && /^\d{4}-\d{2}-\d{2}/.test(val)) return { ...s.td, color: t.colorInfo };
@@ -392,13 +540,21 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
     </div>
   );
 
-  const { columns, rows } = results;
+  const columns = flattened!.columns;
+  const rows = flattened!.rows;
+  const sortKey = (v: RawCellValue): string => {
+    if (v === null) return '';
+    if (typeof v === 'object') {
+      try { return JSON.stringify(v); } catch { return String(v); }
+    }
+    return String(v);
+  };
   const sorted = [...rows].sort((a, b) => {
     if (!sortCol) return 0;
-    const av = a[sortCol], bv = b[sortCol];
+    const av = a[sortCol] ?? null, bv = b[sortCol] ?? null;
     if (av === null) return 1;
     if (bv === null) return -1;
-    const cmp = String(av).localeCompare(String(bv), undefined, { numeric: true });
+    const cmp = sortKey(av).localeCompare(sortKey(bv), undefined, { numeric: true });
     return sortDir === 'asc' ? cmp : -cmp;
   });
 
@@ -406,7 +562,8 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
   const filtered = needle
     ? sorted.filter(row => displayCols.some(col => {
         const v = row[col];
-        return v !== null && String(v).toLowerCase().includes(needle);
+        if (v === null || v === undefined) return false;
+        return sortKey(v).toLowerCase().includes(needle);
       }))
     : sorted;
 
@@ -420,9 +577,22 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
 
   const exportAs = (format: 'csv' | 'json') => {
     if (!results) return;
+    // Export the flattened/displayed view so what users see matches what they get.
+    // Nested values (already rare after one-level flatten) collapse to JSON strings
+    // for CSV; JSON export keeps them as primitive strings too for consistency.
+    const exportRows = sorted.map(r => {
+      const out: Record<string, string | number | boolean | null> = {};
+      for (const c of columns) {
+        const v = r[c] ?? null;
+        out[c] = v !== null && typeof v === 'object'
+          ? (() => { try { return JSON.stringify(v); } catch { return String(v); } })()
+          : (v as string | number | boolean | null);
+      }
+      return out;
+    });
     const content = format === 'csv'
-      ? rowsToCsv(results.columns, sorted)
-      : rowsToJson(sorted);
+      ? rowsToCsv(columns, exportRows)
+      : rowsToJson(exportRows);
     const mime = format === 'csv' ? 'text/csv' : 'application/json';
     downloadBlob(content, mime, `${exportBaseName}.${format}`);
     setExportOpen(false);
@@ -625,7 +795,8 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
               e.preventDefault();
               const kind = isBoolColumn(schemaData, meta) ? 'boolean' : editKindForType(meta.mysqlType);
               const nullable = !meta.notNull;
-              const current = row[col];
+              // editable=true implies a SQL driver column → primitive value
+              const current = row[col] as CellValue;
               const draft = kind === 'boolean'
                 ? (current === null || current === undefined ? 'null' : current === 1 || current === true ? 'true' : 'false')
                 : current === null || current === undefined ? ''
@@ -633,7 +804,7 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
                 : kind === 'date' ? String(current).slice(0, 10)
                 : kind === 'time' ? String(current).slice(-8)
                 : String(current);
-              setEditing({ row, col, draft, kind, nullable, saving: false, error: null });
+              setEditing({ row: row as unknown as Row, col, draft, kind, nullable, saving: false, error: null });
               break;
             }
             case 'Escape': {
@@ -765,37 +936,44 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
                   e.preventDefault();
                   setSelectedRow(i);
                   setSelectedCol(null);
-                  setContextMenu({ x: e.clientX, y: e.clientY, row, col: null });
+                  setContextMenu({ x: e.clientX, y: e.clientY, row: row as Row, col: null });
                 }}
               >
                 <td style={{ ...s.td, color: t.textMuted, textAlign: 'right', paddingRight: 10, fontSize: 10, fontFamily: 'monospace' }}>{i + 1}</td>
                 {displayCols.map((col, colIdx) => {
                   const meta = results.columnMeta?.find(m => m.name === col);
-                  const isEditing = editing && editing.row === row && editing.col === col;
+                  const isEditing = editing && editing.row === (row as unknown as Row) && editing.col === col;
                   const editable = !!(onUpdateCell && meta && meta.orgTable && meta.orgName && !meta.pk);
                   const isFocusedCell = selectedRow === i && selectedCol === colIdx && !isEditing;
+                  const cellVal = row[col] ?? null;
+                  const complex = isComplexValue(cellVal);
                   return (
                     <td
                       key={col}
-                      onClick={(e) => { e.stopPropagation(); setSelectedRow(i); setSelectedCol(colIdx); tableWrapRef.current?.focus(); }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedRow(i); setSelectedCol(colIdx); tableWrapRef.current?.focus();
+                        if (complex) setExpandedCell({ col, value: cellVal });
+                      }}
                       onContextMenu={(e) => {
                         e.preventDefault();
                         e.stopPropagation();
                         setSelectedRow(i);
                         setSelectedCol(colIdx);
-                        setContextMenu({ x: e.clientX, y: e.clientY, row, col });
+                        setContextMenu({ x: e.clientX, y: e.clientY, row: row as Row, col });
                       }}
                       style={{
-                        ...cellStyle(row[col] ?? null),
+                        ...cellStyle(cellVal),
                         padding: isEditing ? 0 : undefined,
                         ...(isFocusedCell ? { boxShadow: `inset 0 0 0 2px ${t.accent}` } : {}),
+                        ...(complex ? { cursor: 'zoom-in' } : {}),
                       }}
                       onDoubleClick={(e) => {
                         if (!editable || !meta) return;
                         e.stopPropagation();
                         const kind = isBoolColumn(schemaData, meta) ? 'boolean' : editKindForType(meta.mysqlType);
                         const nullable = !meta.notNull;
-                        const current = row[col];
+                        const current = row[col] as CellValue;
                         const draft = kind === 'boolean'
                           ? (current === null || current === undefined ? 'null' : current === 1 || current === true ? 'true' : 'false')
                           : current === null || current === undefined ? ''
@@ -803,10 +981,13 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
                           : kind === 'date' ? String(current).slice(0, 10)
                           : kind === 'time' ? String(current).slice(-8)
                           : String(current);
-                        setEditing({ row, col, draft, kind, nullable, saving: false, error: null });
+                        setEditing({ row: row as unknown as Row, col, draft, kind, nullable, saving: false, error: null });
                       }}
                       title={(() => {
-                        const full = cellDisplayValue(row[col] ?? null, meta, schemaData);
+                        if (complex) {
+                          try { return JSON.stringify(cellVal, null, 2); } catch { return String(cellVal); }
+                        }
+                        const full = cellDisplayValue(cellVal as CellValue, meta, schemaData);
                         const colW = colWidths[col] ?? DEFAULT_MAX_COL_WIDTH;
                         const wasTruncated = full !== truncateMiddleToWidth(full, colW);
                         const comment = commentFor(schemaData, meta);
@@ -862,11 +1043,13 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
                           }}
                         />
                       ) : (
-                        row[col] === null
+                        cellVal === null
                           ? <em>NULL</em>
-                          : isBoolColumn(schemaData, meta)
-                            ? (row[col] === 1 || row[col] === true ? 'true' : 'false')
-                            : truncateMiddleToWidth(String(row[col]), colWidths[col] ?? DEFAULT_MAX_COL_WIDTH)
+                          : complex
+                            ? <ComplexCellPreview t={t} value={cellVal} maxWidthPx={colWidths[col] ?? DEFAULT_MAX_COL_WIDTH} />
+                            : isBoolColumn(schemaData, meta)
+                              ? (cellVal === 1 || cellVal === true ? 'true' : 'false')
+                              : truncateMiddleToWidth(String(cellVal), colWidths[col] ?? DEFAULT_MAX_COL_WIDTH)
                       )}
                     </td>
                   );
@@ -1132,7 +1315,86 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
           t={t}
         />
       )}
+
+      {expandedCell && (
+        <div
+          onClick={() => setExpandedCell(null)}
+          style={{
+            position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.5)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: t.bgElevated, border: `1px solid ${t.border}`, borderRadius: 6,
+              padding: 16, minWidth: 480, maxWidth: '80vw', maxHeight: '80vh',
+              display: 'flex', flexDirection: 'column',
+              fontFamily: '"IBM Plex Sans", sans-serif', color: t.textPrimary,
+              boxShadow: '0 10px 40px rgba(0,0,0,0.4)',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+              <h3 style={{ margin: 0, fontSize: 13, fontWeight: 600, fontFamily: '"JetBrains Mono", monospace' }}>{expandedCell.col}</h3>
+              <span style={{ fontSize: 11, color: t.textMuted }}>
+                {Array.isArray(expandedCell.value) ? `array · ${(expandedCell.value as unknown[]).length} item${(expandedCell.value as unknown[]).length === 1 ? '' : 's'}` : 'object'}
+              </span>
+              <div style={{ flex: 1 }} />
+              <button
+                onClick={() => {
+                  try { copyToClipboard(JSON.stringify(expandedCell.value, null, 2)); } catch { /* noop */ }
+                }}
+                style={{
+                  padding: '4px 10px', fontSize: 11, fontFamily: 'inherit',
+                  background: 'transparent', color: t.textSecondary,
+                  border: `1px solid ${t.border}`, borderRadius: 3, cursor: 'pointer',
+                }}
+              >Copy JSON</button>
+              <button
+                onClick={() => setExpandedCell(null)}
+                style={{
+                  padding: '4px 10px', fontSize: 11, fontFamily: 'inherit',
+                  background: 'transparent', color: t.textSecondary,
+                  border: `1px solid ${t.border}`, borderRadius: 3, cursor: 'pointer',
+                }}
+              >Close</button>
+            </div>
+            <pre style={{
+              margin: 0, padding: '10px 12px', background: t.bgBase,
+              border: `1px solid ${t.borderSubtle}`, borderRadius: 4,
+              fontSize: 12, fontFamily: '"JetBrains Mono", monospace',
+              color: t.textPrimary, overflow: 'auto', flex: 1,
+              whiteSpace: 'pre', wordBreak: 'normal',
+            }}>{(() => {
+              try { return JSON.stringify(expandedCell.value, null, 2); } catch { return String(expandedCell.value); }
+            })()}</pre>
+          </div>
+        </div>
+      )}
     </div>
+  );
+}
+
+interface ComplexCellPreviewProps {
+  t: Theme;
+  value: unknown[] | Record<string, unknown>;
+  maxWidthPx: number;
+}
+
+function ComplexCellPreview({ t, value, maxWidthPx }: ComplexCellPreviewProps) {
+  // Char budget mirrors `truncateMiddleToWidth` so the preview takes ~the same
+  // space as a plain string of equal width. The hint icon signals the cell is
+  // expandable; click is wired by the parent <td>.
+  const charBudget = Math.max(8, Math.floor((maxWidthPx - CELL_PADDING_X) / monoCharWidth()) - 2);
+  const preview = jsonPreview(value, charBudget);
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+      <span style={{ color: t.textSecondary }}>{preview}</span>
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke={t.textMuted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }} aria-hidden>
+        <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/>
+        <line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
+      </svg>
+    </span>
   );
 }
 
