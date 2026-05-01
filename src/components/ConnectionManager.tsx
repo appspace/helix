@@ -126,13 +126,6 @@ export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => {
-    if (!onDismiss || isConnecting) return;
-    const key = (e: KeyboardEvent) => { if (e.key === 'Escape') onDismiss(); };
-    window.addEventListener('keydown', key);
-    return () => window.removeEventListener('keydown', key);
-  }, [onDismiss, isConnecting]);
-
   const isMongoUri = form.type === 'mongodb' && form.mongoMode === 'uri';
 
   const buildSubmitForm = (): ConnectionForm => {
@@ -247,8 +240,8 @@ export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t
   });
 
   return (
-    <div style={s.overlay} onClick={!isConnecting ? onDismiss : undefined}>
-      <div style={s.modal} onClick={(e) => e.stopPropagation()}>
+    <div style={s.overlay}>
+      <div style={s.modal}>
         <div style={s.header}>
           <svg width="20" height="20" viewBox="0 0 40 40" fill="none">
             <path d="M6 6 C6 6, 20 2, 20 20 C20 38, 6 34, 6 34" stroke={t.accent} strokeWidth="2.5" strokeLinecap="round"/>
