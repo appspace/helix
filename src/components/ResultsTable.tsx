@@ -93,13 +93,20 @@ function isBoolColumn(schemaData: SchemaData | undefined, meta: ColumnMeta | und
   return col?.type === 'tinyint(1)';
 }
 
-function cellDisplayValue(val: RawCellValue, meta: ColumnMeta | undefined, schemaData: SchemaData | undefined): string {
+function cellDisplayValue(
+  val: RawCellValue,
+  meta: ColumnMeta | undefined,
+  schemaData: SchemaData | undefined,
+  multiline = true,
+): string {
   if (val === null || val === undefined) return '';
   if (isBoolColumn(schemaData, meta)) return val === 1 || val === true ? 'true' : 'false';
   if (typeof val === 'object') {
-    // Match the modal's "Copy JSON" output so Ctrl+C / right-click Copy on
-    // a complex cell yields pretty-printed JSON rather than a single line.
-    try { return JSON.stringify(val, null, 2); } catch { return String(val); }
+    // Single-cell copy uses pretty-printed JSON to match the modal's "Copy JSON"
+    // output. Row-copy joins cells with tabs to build a TSV for spreadsheets, so
+    // embedded newlines would split one cell across multiple spreadsheet rows —
+    // pass multiline=false there to keep the JSON on one line.
+    try { return multiline ? JSON.stringify(val, null, 2) : JSON.stringify(val); } catch { return String(val); }
   }
   return String(val);
 }
@@ -830,7 +837,7 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
               } else {
                 const text = displayCols.map(col => {
                   const meta = results.columnMeta?.find(m => m.name === col);
-                  return cellDisplayValue(row[col] ?? null, meta, schemaData);
+                  return cellDisplayValue(row[col] ?? null, meta, schemaData, false);
                 }).join('\t');
                 copyToClipboard(text);
               }
@@ -1121,7 +1128,7 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
               onClick={() => {
                 const text = displayCols.map(col => {
                   const meta = results.columnMeta?.find(m => m.name === col);
-                  return cellDisplayValue(contextMenu.row[col] ?? null, meta, schemaData);
+                  return cellDisplayValue(contextMenu.row[col] ?? null, meta, schemaData, false);
                 }).join('\t');
                 copyToClipboard(text);
                 setContextMenu(null);
