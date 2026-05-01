@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import type { CSSProperties } from 'react';
 import { DARK, LIGHT } from './theme';
 import type { ThemeName } from './theme';
@@ -22,8 +22,6 @@ interface Tab {
 }
 
 const EMPTY_SCHEMA: SchemaData = { tables: [], views: [], procedures: [], triggers: [] };
-
-let tabCounter = 1;
 
 const THEME_KEY = 'helix.theme';
 
@@ -66,6 +64,7 @@ export default function App() {
     { id: '1', name: 'query_1.sql', query: '' },
   ]);
   const [activeTab, setActiveTab] = useState('1');
+  const tabCounter = useRef(1);
   const [results, setResults] = useState<QueryResults | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const [queryError, setQueryError] = useState<string | null>(null);
@@ -304,8 +303,8 @@ export default function App() {
   };
 
   const addTab = (name: string, query: string) => {
-    tabCounter++;
-    const id = String(tabCounter);
+    tabCounter.current++;
+    const id = String(tabCounter.current);
     setTabs(ts => [...ts, { id, name, query }]);
     setActiveTab(id);
     setResults(null);
@@ -314,7 +313,7 @@ export default function App() {
     return id;
   };
 
-  const handleNewTab = () => addTab(`query_${tabCounter + 1}.sql`, '');
+  const handleNewTab = () => addTab(`query_${tabCounter.current + 1}.sql`, '');
 
   const handleCloseTab = (id: string) => {
     setTabs(ts => {
