@@ -129,7 +129,9 @@ export function InsertRowDialog({ table, columns, onSubmit, onClose, t }: Insert
     const colList = cols.map(c => `\`${c}\``).join(', ');
     const valList = cols.map(c => {
       const v = pendingValues[c];
-      return v === null ? 'NULL' : JSON.stringify(v);
+      if (v === null) return 'NULL';
+      if (typeof v === 'string') return `'${v.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+      return String(v);
     }).join(', ');
     return `INSERT INTO \`${table}\`\n  (${colList})\nVALUES\n  (${valList});`;
   };
