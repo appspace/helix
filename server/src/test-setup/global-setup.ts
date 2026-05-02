@@ -44,6 +44,14 @@ export async function setup() {
         age  INT,
         bio  TEXT
       );
+
+      CREATE TABLE orders (
+        id         INT AUTO_INCREMENT PRIMARY KEY,
+        user_id    INT,
+        total      DECIMAL(10,2) NOT NULL,
+        created_at DATETIME DEFAULT NOW(),
+        INDEX idx_orders_user_id (user_id)
+      );
     `);
   } finally {
     await conn.end();

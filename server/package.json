@@ -10,7 +10,9 @@
     "build": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:integration": "vitest run --config vitest.integration.config.ts"
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:integration-pg": "vitest run --config vitest.integration-pg.config.ts",
+    "test:integration-mongo": "vitest run --config vitest.integration-mongo.config.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
