@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { Document } from 'mongodb';
 
 const mockCursor = {
   project: vi.fn(),
@@ -556,25 +557,50 @@ describe('MongoDBDriver – getSchemas', () => {
   });
 });
 
+/**
+ * Build a stub collection whose `find().sort().limit().toArray()` chain resolves
+ * to the supplied docs. The returned object exposes spies on each link so tests
+ * can assert deterministic-sort + sample-size wiring.
+ */
+function makeSampleColl(docs: Document[], count: number) {
+  const toArray = vi.fn().mockResolvedValue(docs);
+  const limit = vi.fn(() => ({ toArray }));
+  const sort = vi.fn(() => ({ limit }));
+  const find = vi.fn(() => ({ sort }));
+  return {
+    find,
+    sort,
+    limit,
+    toArray,
+    estimatedDocumentCount: vi.fn().mockResolvedValue(count),
+  };
+}
+
 describe('MongoDBDriver – getSchema (field inference)', () => {
-  it('samples one document per collection and marks columns as inferred', async () => {
+  it('samples documents with deterministic sort and SAMPLE_SIZE limit', async () => {
     mockListCursor.toArray.mockResolvedValueOnce([
       { name: 'users', type: 'collection' },
       { name: 'orders_v', type: 'view' },
     ]);
 
-    const usersColl = {
-      findOne: vi.fn().mockResolvedValueOnce({
-        _id: new ObjectIdCtor('aaaaaaaaaaaaaaaaaaaaaaaa'),
-        name: 'Ann',
-        age: 30,
-        joined: new Date('2024-01-01T00:00:00.000Z'),
-      }),
-      estimatedDocumentCount: vi.fn().mockResolvedValueOnce(7),
-    };
+    const usersColl = makeSampleColl(
+      [
+        {
+          _id: new ObjectIdCtor('aaaaaaaaaaaaaaaaaaaaaaaa'),
+          name: 'Ann',
+          age: 30,
+          joined: new Date('2024-01-01T00:00:00.000Z'),
+        },
+      ],
+      7,
+    );
     mockDb.collection.mockReturnValueOnce(usersColl as unknown as typeof mockCollection);
 
     const schema = await makeDriver().getSchema('shop');
+    expect(usersColl.find).toHaveBeenCalledWith({});
+    expect(usersColl.sort).toHaveBeenCalledWith({ _id: -1 });
+    expect(usersColl.limit).toHaveBeenCalledWith(50);
+
     expect(schema.views).toEqual(['orders_v']);
     expect(schema.tables).toHaveLength(1);
     const t = schema.tables[0];
@@ -584,21 +610,101 @@ describe('MongoDBDriver – getSchema (field inference)', () => {
     const cmap = Object.fromEntries(t.columns.map((c) => [c.name, c]));
     expect(cmap['_id'].pk).toBe(true);
     expect(cmap['_id'].dataType).toBe('objectId');
+    expect(cmap['_id'].nullable).toBe(false);
     expect(cmap['name'].dataType).toBe('string');
     expect(cmap['age'].dataType).toBe('int');
     expect(cmap['joined'].dataType).toBe('date');
   });
 
+  it('returns the union of keys across sampled docs', async () => {
+    mockListCursor.toArray.mockResolvedValueOnce([
+      { name: 'users', type: 'collection' },
+    ]);
+    const usersColl = makeSampleColl(
+      [
+        { _id: new ObjectIdCtor('a'.repeat(24)), name: 'A', age: 25 },
+        { _id: new ObjectIdCtor('b'.repeat(24)), name: 'B', email: 'b@x.com' },
+      ],
+      2,
+    );
+    mockDb.collection.mockReturnValueOnce(usersColl as unknown as typeof mockCollection);
+
+    const schema = await makeDriver().getSchema('shop');
+    const names = schema.tables[0].columns.map((c) => c.name).sort();
+    expect(names).toEqual(['_id', 'age', 'email', 'name']);
+  });
+
+  it('marks fields nullable when present in some but not all sampled docs', async () => {
+    mockListCursor.toArray.mockResolvedValueOnce([
+      { name: 'users', type: 'collection' },
+    ]);
+    const usersColl = makeSampleColl(
+      [
+        { _id: new ObjectIdCtor('a'.repeat(24)), name: 'A', age: 25 },
+        { _id: new ObjectIdCtor('b'.repeat(24)), name: 'B' },
+      ],
+      2,
+    );
+    mockDb.collection.mockReturnValueOnce(usersColl as unknown as typeof mockCollection);
+
+    const schema = await makeDriver().getSchema('shop');
+    const cmap = Object.fromEntries(
+      schema.tables[0].columns.map((c) => [c.name, c]),
+    );
+    // present in every doc → nullable false
+    expect(cmap['name'].nullable).toBe(false);
+    // present in only one doc → nullable true
+    expect(cmap['age'].nullable).toBe(true);
+    // _id is always non-nullable regardless of sample
+    expect(cmap['_id'].nullable).toBe(false);
+  });
+
+  it('reports type conflicts via comment and picks the most-frequent type', async () => {
+    mockListCursor.toArray.mockResolvedValueOnce([
+      { name: 'users', type: 'collection' },
+    ]);
+    const usersColl = makeSampleColl(
+      [
+        { _id: new ObjectIdCtor('a'.repeat(24)), age: 25 },
+        { _id: new ObjectIdCtor('b'.repeat(24)), age: 30 },
+        { _id: new ObjectIdCtor('c'.repeat(24)), age: 'thirty' },
+      ],
+      3,
+    );
+    mockDb.collection.mockReturnValueOnce(usersColl as unknown as typeof mockCollection);
+
+    const schema = await makeDriver().getSchema('shop');
+    const age = schema.tables[0].columns.find((c) => c.name === 'age')!;
+    expect(age.dataType).toBe('int'); // 2 ints beat 1 string
+    expect(age.comment).toBe('types: int, string');
+  });
+
+  it('falls back to first-seen type on a tie', async () => {
+    mockListCursor.toArray.mockResolvedValueOnce([
+      { name: 'users', type: 'collection' },
+    ]);
+    const usersColl = makeSampleColl(
+      [
+        { _id: new ObjectIdCtor('a'.repeat(24)), v: 'one' },
+        { _id: new ObjectIdCtor('b'.repeat(24)), v: 2 },
+      ],
+      2,
+    );
+    mockDb.collection.mockReturnValueOnce(usersColl as unknown as typeof mockCollection);
+
+    const schema = await makeDriver().getSchema('shop');
+    const v = schema.tables[0].columns.find((c) => c.name === 'v')!;
+    expect(v.dataType).toBe('string');
+    expect(v.comment).toBe('types: string, int');
+  });
+
   it('emits a placeholder _id column when a collection is empty', async () => {
     mockListCursor.toArray.mockResolvedValueOnce([{ name: 'empty', type: 'collection' }]);
-    const emptyColl = {
-      findOne: vi.fn().mockResolvedValueOnce(null),
-      estimatedDocumentCount: vi.fn().mockResolvedValueOnce(0),
-    };
+    const emptyColl = makeSampleColl([], 0);
     mockDb.collection.mockReturnValueOnce(emptyColl as unknown as typeof mockCollection);
     const schema = await makeDriver().getSchema('shop');
     expect(schema.tables[0].columns).toEqual([
-      expect.objectContaining({ name: '_id', pk: true, inferred: true }),
+      expect.objectContaining({ name: '_id', pk: true, inferred: true, nullable: false }),
     ]);
   });
 });
@@ -610,13 +716,24 @@ describe('MongoDBDriver – getTable', () => {
     expect(r).toBeNull();
   });
 
-  it('returns inferred columns when the collection exists', async () => {
+  it('returns inferred columns from union-of-keys sampling', async () => {
     mockListCursor.toArray.mockResolvedValueOnce([{ name: 'users', type: 'collection' }]);
-    mockCollection.findOne.mockResolvedValueOnce({ name: 'X' });
-    mockCollection.estimatedDocumentCount.mockResolvedValueOnce(3);
+    const usersColl = makeSampleColl(
+      [
+        { _id: new ObjectIdCtor('a'.repeat(24)), name: 'X' },
+        { _id: new ObjectIdCtor('b'.repeat(24)), name: 'Y', email: 'y@x.com' },
+      ],
+      3,
+    );
+    mockDb.collection.mockReturnValueOnce(usersColl as unknown as typeof mockCollection);
     const r = await makeDriver().getTable('shop', 'users');
+    expect(usersColl.sort).toHaveBeenCalledWith({ _id: -1 });
+    expect(usersColl.limit).toHaveBeenCalledWith(50);
     expect(r?.name).toBe('users');
-    expect(r?.columns.find((c) => c.name === 'name')?.inferred).toBe(true);
+    const cmap = Object.fromEntries(r!.columns.map((c) => [c.name, c]));
+    expect(cmap['name'].inferred).toBe(true);
+    expect(cmap['name'].nullable).toBe(false); // in both docs
+    expect(cmap['email'].nullable).toBe(true); // only in one doc
   });
 });
 
