@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import type { CSSProperties } from 'react';
 import type { Theme } from '../theme';
 import type { SchemaColumn } from '../api';
+import { buildInsertSql } from '../lib/sql';
 
 type CellValue = string | number | null;
 type EditKind = 'number' | 'date' | 'datetime' | 'time' | 'text';
@@ -123,18 +124,7 @@ export function InsertRowDialog({ table, columns, onSubmit, onClose, t }: Insert
     btnSecondary: { padding: '6px 14px', fontSize: 12, fontFamily: 'inherit', background: 'transparent', color: t.textSecondary, border: `1px solid ${t.border}`, borderRadius: 4, cursor: saving ? 'not-allowed' : 'pointer' } as CSSProperties,
   };
 
-  const previewSql = (): string => {
-    const cols = Object.keys(pendingValues);
-    if (cols.length === 0) return `INSERT INTO \`${table}\` () VALUES ();`;
-    const colList = cols.map(c => `\`${c}\``).join(', ');
-    const valList = cols.map(c => {
-      const v = pendingValues[c];
-      if (v === null) return 'NULL';
-      if (typeof v === 'string') return `'${v.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
-      return String(v);
-    }).join(', ');
-    return `INSERT INTO \`${table}\`\n  (${colList})\nVALUES\n  (${valList});`;
-  };
+  const previewSql = (): string => buildInsertSql(table, pendingValues);
 
   return (
     <div style={s.overlay} onClick={() => !saving && onClose()}>

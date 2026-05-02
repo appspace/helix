@@ -10,6 +10,7 @@
     "dev:server": "npm run dev --prefix server",
     "dev:all": "concurrently \"npm run dev\" \"npm run dev:server\"",
     "build": "tsc -b && vite build",
+    "test": "vitest run",
     "lint": "eslint .",
     "preview": "vite preview",
     "electron:dev": "concurrently -k \"npm run dev\" \"npm run dev:server\" \"electron electron/main.cjs\"",
@@ -73,6 +74,7 @@
     "globals": "^17.5.0",
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.58.2",
-    "vite": "^8.0.9"
+    "vite": "^8.0.9",
+    "vitest": "^4.1.5"
   }
 }
