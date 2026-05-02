@@ -1,5 +1,36 @@
 import { describe, it, expect } from 'vitest';
-import { formatSqlValue, buildInsertSql } from './sql';
+import { formatSqlValue, buildInsertSql, parseEnumValues } from './sql';
+
+describe('parseEnumValues', () => {
+  it('parses a standard enum type', () => {
+    expect(parseEnumValues("enum('active','inactive','pending')")).toEqual(['active', 'inactive', 'pending']);
+  });
+
+  it('parses a single-value enum', () => {
+    expect(parseEnumValues("enum('only')")).toEqual(['only']);
+  });
+
+  it('unescapes single quotes inside values', () => {
+    expect(parseEnumValues("enum('O\\'Brien','Smith')")).toEqual(["O'Brien", 'Smith']);
+  });
+
+  it('unescapes backslashes inside values', () => {
+    expect(parseEnumValues("enum('C:\\\\path')")).toEqual(['C:\\path']);
+  });
+
+  it('returns null for non-enum types', () => {
+    expect(parseEnumValues('varchar(100)')).toBeNull();
+    expect(parseEnumValues('int')).toBeNull();
+  });
+
+  it('returns null for an empty string', () => {
+    expect(parseEnumValues('')).toBeNull();
+  });
+
+  it('is case-insensitive for the ENUM keyword', () => {
+    expect(parseEnumValues("ENUM('a','b')")).toEqual(['a', 'b']);
+  });
+});
 
 describe('formatSqlValue', () => {
   it('renders NULL for null', () => {

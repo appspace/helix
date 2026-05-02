@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import type { CSSProperties } from 'react';
 import type { Theme } from '../theme';
 import type { SchemaColumn } from '../api';
-import { buildInsertSql } from '../lib/sql';
+import { buildInsertSql, parseEnumValues } from '../lib/sql';
 
 type CellValue = string | number | null;
 type EditKind = 'number' | 'date' | 'datetime' | 'time' | 'text';
@@ -143,6 +143,7 @@ export function InsertRowDialog({ table, columns, onSubmit, onClose, t }: Insert
                 </div>
               )}
               {editable.map(col => {
+                const enumValues = parseEnumValues(col.type);
                 const kind = editKindForDataType(col.dataType);
                 const inputType = kind === 'number' ? 'number'
                   : kind === 'date' ? 'date'
@@ -150,6 +151,7 @@ export function InsertRowDialog({ table, columns, onSubmit, onClose, t }: Insert
                   : kind === 'time' ? 'time'
                   : 'text';
                 const required = !col.nullable && col.default === null;
+                const hasBlankOption = col.nullable || col.default !== null;
                 return (
                   <div key={col.name} style={s.row}>
                     <div>
@@ -160,18 +162,33 @@ export function InsertRowDialog({ table, columns, onSubmit, onClose, t }: Insert
                       <div style={s.labelMuted}>{col.type}{col.pk ? ' · PK' : ''}</div>
                     </div>
                     <div>
-                      <input
-                        type={inputType}
-                        value={drafts[col.name] ?? ''}
-                        step={kind === 'number' ? 'any' : undefined}
-                        onChange={(e) => setDrafts(p => ({ ...p, [col.name]: e.target.value }))}
-                        placeholder={
-                          col.default !== null ? `default: ${col.default}` :
-                          col.nullable ? 'NULL' :
-                          ''
-                        }
-                        style={s.input}
-                      />
+                      {enumValues ? (
+                        <select
+                          value={drafts[col.name] ?? ''}
+                          onChange={(e) => setDrafts(p => ({ ...p, [col.name]: e.target.value }))}
+                          style={s.input}
+                        >
+                          {hasBlankOption && (
+                            <option value=''>
+                              {col.default !== null ? `default: ${col.default}` : 'NULL'}
+                            </option>
+                          )}
+                          {enumValues.map(v => <option key={v} value={v}>{v}</option>)}
+                        </select>
+                      ) : (
+                        <input
+                          type={inputType}
+                          value={drafts[col.name] ?? ''}
+                          step={kind === 'number' ? 'any' : undefined}
+                          onChange={(e) => setDrafts(p => ({ ...p, [col.name]: e.target.value }))}
+                          placeholder={
+                            col.default !== null ? `default: ${col.default}` :
+                            col.nullable ? 'NULL' :
+                            ''
+                          }
+                          style={s.input}
+                        />
+                      )}
                       {col.comment && <div style={s.helper}>{col.comment}</div>}
                     </div>
                   </div>
