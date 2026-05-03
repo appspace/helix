@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import type { CSSProperties } from 'react';
 import type { Theme } from '../theme';
 import { api } from '../api';
@@ -31,7 +31,6 @@ interface ConnectionManagerProps {
   onConnect: (form: ConnectionForm) => void;
   isConnecting: boolean;
   error: string | null;
-  onDismiss?: () => void;
   t: Theme;
 }
 
@@ -82,7 +81,7 @@ const formFromSaved = (entry: SavedConnection): ConnectionForm => {
   };
 };
 
-export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t }: ConnectionManagerProps) {
+export function ConnectionManager({ onConnect, isConnecting, error, t }: ConnectionManagerProps) {
   const [saved, setSaved] = useState<SavedConnection[]>(() => listSavedConnections());
   const [form, setForm] = useState<ConnectionForm>(() => {
     const list = listSavedConnections();
@@ -104,11 +103,6 @@ export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: true } | { ok: false; error: string } | null>(null);
   const [canSavePassword, setCanSavePassword] = useState(false);
-
-  // Track whether a click began on the backdrop. Only dismiss when both mousedown
-  // and click landed on the backdrop — a drag that starts inside the modal and
-  // releases on the backdrop (e.g. text-selection) must not close the modal.
-  const mouseDownOnBackdrop = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -245,17 +239,7 @@ export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t
   });
 
   return (
-    <div
-      style={s.overlay}
-      onMouseDown={(e) => { mouseDownOnBackdrop.current = e.target === e.currentTarget; }}
-      onMouseUp={(e) => { if (e.target !== e.currentTarget) mouseDownOnBackdrop.current = false; }}
-      onClick={(e) => {
-        const started = mouseDownOnBackdrop.current;
-        mouseDownOnBackdrop.current = false;
-        if (!onDismiss || isConnecting) return;
-        if (started && e.target === e.currentTarget) onDismiss();
-      }}
-    >
+    <div style={s.overlay}>
       <div style={s.modal}>
         <div style={s.header}>
           <svg width="20" height="20" viewBox="0 0 40 40" fill="none">
@@ -558,14 +542,6 @@ export function ConnectionManager({ onConnect, isConnecting, error, onDismiss, t
           </div>
 
           <div style={s.footer}>
-            {onDismiss && (
-              <button
-                type="button"
-                onClick={onDismiss}
-                disabled={isConnecting}
-                style={{ ...s.testBtn, opacity: isConnecting ? 0.5 : 1, cursor: isConnecting ? 'not-allowed' : 'pointer' }}
-              >Cancel</button>
-            )}
             <button
               type="button"
               style={{ ...s.testBtn, opacity: testing ? 0.7 : 1, cursor: testing ? 'wait' : 'pointer' }}
