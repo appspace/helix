@@ -19,6 +19,16 @@ interface Tab {
   name: string;
   query: string;
   modified?: boolean;
+  // Set when the tab was opened by clicking a table in the sidebar.
+  // Used to dedupe table-clicks per (schema, table), independent of the
+  // tab's display name — so a saved query that happens to be called
+  // `users` can't collide with a `users` table in some schema, and the
+  // same table name in two different schemas gets its own tab.
+  sourceTable?: { schema: string; table: string };
+  results?: QueryResults | null;
+  queryError?: string | null;
+  execTime?: number | null;
+  isRunning?: boolean;
 }
 
 const EMPTY_SCHEMA: SchemaData = { tables: [], views: [], procedures: [], triggers: [] };
@@ -65,13 +75,20 @@ export default function App() {
   ]);
   const [activeTab, setActiveTab] = useState('1');
   const tabCounter = useRef(1);
-  const [results, setResults] = useState<QueryResults | null>(null);
-  const [isRunning, setIsRunning] = useState(false);
-  const [queryError, setQueryError] = useState<string | null>(null);
-  const [execTime, setExecTime] = useState<number | null>(null);
   const [activeTable, setActiveTable] = useState<string | null>(null);
 
   const currentTab = tabs.find(tab => tab.id === activeTab)!;
+  const results = currentTab?.results ?? null;
+  const isRunning = currentTab?.isRunning ?? false;
+  const queryError = currentTab?.queryError ?? null;
+  const execTime = currentTab?.execTime ?? null;
+
+  // Per-tab state updater. Targets a specific tab id (captured at call time)
+  // so async query handlers write back to the originating tab even if the
+  // user has switched in the meantime.
+  const updateTab = useCallback((id: string, patch: Partial<Tab>) => {
+    setTabs(ts => ts.map(tb => tb.id === id ? { ...tb, ...patch } : tb));
+  }, []);
 
   const loadSchema = useCallback(async (schema: string) => {
     try {
@@ -153,17 +170,16 @@ export default function App() {
     setSchemas([]);
     setActiveSchema('');
     setSchemaData(EMPTY_SCHEMA);
-    setResults(null);
-    setQueryError(null);
-    setExecTime(null);
+    tabCounter.current = 1;
+    setTabs([{ id: '1', name: 'query_1.sql', query: '' }]);
+    setActiveTab('1');
     setActiveTable(null);
   };
 
   const handleDropTable = async (schema: string, table: string) => {
     await api.dropTable(schema, table);
     if (activeTable === table) setActiveTable(null);
-    setResults(null);
-    setQueryError(null);
+    updateTab(activeTab, { results: null, queryError: null });
     await loadSchema(schema);
   };
 
@@ -171,14 +187,17 @@ export default function App() {
     table: string,
     values: Record<string, string | number | boolean | null>,
   ) => {
+    const targetTab = activeTab;
     await api.insertRow(activeSchema, table, values);
     // Re-run the current query so the grid reflects the new row (if it matches WHERE/ORDER/LIMIT).
     const sql = currentTab?.query?.trim();
     if (sql) {
       try {
         const res = await api.query(sql, activeSchema);
-        setResults({ columns: res.columns, columnMeta: res.columnMeta, rows: res.rows });
-        setExecTime(res.executionTime);
+        updateTab(targetTab, {
+          results: { columns: res.columns, columnMeta: res.columnMeta, rows: res.rows },
+          execTime: res.executionTime,
+        });
       } catch { /* leave prior results visible */ }
     }
     // Refresh schema row counts in the sidebar.
@@ -189,30 +208,35 @@ export default function App() {
     row: Record<string, string | number | boolean | null>,
     target: { table: string; where: { column: string; value: string | number | boolean | null }[]; column: string; value: string | number | boolean | null },
   ) => {
+    const targetTab = activeTab;
     await api.updateCell(activeSchema, target.table, target.where, target.column, target.value);
-    setResults(prev => {
-      if (!prev) return prev;
-      const meta = prev.columnMeta?.find(m => m.orgTable === target.table && m.orgName === target.column);
+    setTabs(ts => ts.map(tb => {
+      if (tb.id !== targetTab || !tb.results) return tb;
+      const meta = tb.results.columnMeta?.find(m => m.orgTable === target.table && m.orgName === target.column);
       const key = meta?.name ?? target.column;
-      return { ...prev, rows: prev.rows.map(r => r === row ? { ...r, [key]: target.value } : r) };
-    });
+      return { ...tb, results: { ...tb.results, rows: tb.results.rows.map(r => r === row ? { ...r, [key]: target.value } : r) } };
+    }));
   };
 
   const handleDeleteRow = async (
     row: Record<string, string | number | boolean | null>,
     target: { table: string; where: { column: string; value: string | number | boolean | null }[] },
   ) => {
+    const targetTab = activeTab;
     const result = await api.deleteRow(activeSchema, target.table, target.where);
     if (result.affectedRows === 0) {
       throw new Error('No rows were deleted (row may have already been removed).');
     }
-    setResults(prev => prev ? { ...prev, rows: prev.rows.filter(r => r !== row) } : prev);
+    setTabs(ts => ts.map(tb => tb.id === targetTab && tb.results
+      ? { ...tb, results: { ...tb.results, rows: tb.results.rows.filter(r => r !== row) } }
+      : tb));
   };
 
   const handleRun = async () => {
     if (isRunning) return;
     const text = currentTab?.query?.trim();
     if (!text) return;
+    const targetTab = activeTab;
 
     let mqlPayload: unknown = null;
     if (queryMode === 'mql') {
@@ -220,27 +244,26 @@ export default function App() {
         mqlPayload = JSON.parse(text);
       } catch (err) {
         // Surface the error so callers that bypass QueryEditor.handleRunClick still see it.
-        setQueryError(err instanceof Error ? err.message : String(err));
+        updateTab(targetTab, { queryError: err instanceof Error ? err.message : String(err) });
         return;
       }
       if (typeof mqlPayload !== 'object' || mqlPayload === null || Array.isArray(mqlPayload)) {
-        setQueryError('MQL request must be a JSON object (e.g. { "collection": "...", "operation": "find" }).');
+        updateTab(targetTab, { queryError: 'MQL request must be a JSON object (e.g. { "collection": "...", "operation": "find" }).' });
         return;
       }
     }
 
-    setIsRunning(true);
-    setResults(null);
-    setQueryError(null);
-    setExecTime(null);
+    updateTab(targetTab, { isRunning: true, results: null, queryError: null, execTime: null });
 
     const started = Date.now();
     try {
       const res = queryMode === 'mql'
         ? await api.queryMql(mqlPayload, activeSchema)
         : await api.query(text, activeSchema);
-      setResults({ columns: res.columns, columnMeta: res.columnMeta, rows: res.rows });
-      setExecTime(res.executionTime);
+      updateTab(targetTab, {
+        results: { columns: res.columns, columnMeta: res.columnMeta, rows: res.rows },
+        execTime: res.executionTime,
+      });
       if (connectionHost) {
         const entry = addHistoryEntry(connectionHost, {
           sql: text, schema: activeSchema, executedAt: started,
@@ -250,7 +273,7 @@ export default function App() {
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      setQueryError(message);
+      updateTab(targetTab, { queryError: message });
       if (connectionHost) {
         const entry = addHistoryEntry(connectionHost, {
           sql: text, schema: activeSchema, executedAt: started,
@@ -259,7 +282,7 @@ export default function App() {
         if (entry) setHistory(prev => [entry, ...prev].slice(0, 100));
       }
     } finally {
-      setIsRunning(false);
+      updateTab(targetTab, { isRunning: false });
     }
   };
 
@@ -302,14 +325,11 @@ export default function App() {
     setTabs(ts => ts.map(tab => tab.id === activeTab ? { ...tab, query: val, modified: true } : tab));
   };
 
-  const addTab = (name: string, query: string) => {
+  const addTab = (name: string, query: string, sourceTable?: { schema: string; table: string }) => {
     tabCounter.current++;
     const id = String(tabCounter.current);
-    setTabs(ts => [...ts, { id, name, query }]);
+    setTabs(ts => [...ts, { id, name, query, sourceTable }]);
     setActiveTab(id);
-    setResults(null);
-    setQueryError(null);
-    setExecTime(null);
     return id;
   };
 
@@ -325,19 +345,31 @@ export default function App() {
 
   const handleTableSelect = (name: string) => {
     setActiveTable(name);
+    const existing = tabs.find(tb => tb.sourceTable?.schema === activeSchema && tb.sourceTable?.table === name);
+    if (existing) {
+      setActiveTab(existing.id);
+      return;
+    }
+    const source = { schema: activeSchema, table: name };
     if (queryMode === 'mql') {
       const body = JSON.stringify({ collection: name, operation: 'find', filter: {}, limit: 100 }, null, 2);
-      addTab(`${name}.json`, body);
+      addTab(`${name}.json`, body, source);
     } else {
-      addTab(`${name}.sql`, `SELECT *\nFROM \`${name}\`\nLIMIT 100;`);
+      addTab(`${name}.sql`, `SELECT *\nFROM \`${name}\`\nLIMIT 100;`, source);
     }
   };
 
   const switchTab = (id: string) => {
     setActiveTab(id);
-    setResults(null);
-    setQueryError(null);
-    setExecTime(null);
+    // Sync the schema-browser highlight with the tab the user landed on:
+    // light up the bound table when the target tab came from a sidebar
+    // click in the current schema, otherwise clear the highlight.
+    const target = tabs.find(tb => tb.id === id);
+    if (target?.sourceTable && target.sourceTable.schema === activeSchema) {
+      setActiveTable(target.sourceTable.table);
+    } else {
+      setActiveTable(null);
+    }
   };
 
   const toggleTheme = () => {
