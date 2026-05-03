@@ -93,24 +93,47 @@ export function SchemaBrowser({ schema, activeTable, onTableSelect, onSchemaChan
   const [resizing, setResizing] = useState(false);
   const dropInputRef = useRef<HTMLInputElement>(null);
 
+  // Holds the teardown for an in-flight drag so the unmount cleanup below can
+  // remove the window listeners and restore body styles even if the user
+  // disconnects (or otherwise unmounts the browser) mid-drag.
+  const dragCleanupRef = useRef<(() => void) | null>(null);
+  useEffect(() => () => { dragCleanupRef.current?.(); }, []);
+
   const onResizeStart = (e: React.MouseEvent) => {
+    if (e.button !== 0) return;
     e.preventDefault();
     setResizing(true);
     const startX = e.clientX;
     const startWidth = width;
     let lastWidth = startWidth;
+
+    // Lock document-level cursor + selection so the browser doesn't start
+    // selecting text — and flip the cursor away from col-resize — once the
+    // pointer leaves the 5px handle during a drag.
+    const prevUserSelect = document.body.style.userSelect;
+    const prevCursor = document.body.style.cursor;
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'col-resize';
+
     const onMove = (ev: MouseEvent) => {
       lastWidth = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, startWidth + (ev.clientX - startX)));
       setWidth(lastWidth);
     };
-    const onUp = () => {
-      setResizing(false);
+    const cleanup = () => {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
+      document.body.style.userSelect = prevUserSelect;
+      document.body.style.cursor = prevCursor;
+      dragCleanupRef.current = null;
+    };
+    const onUp = () => {
+      setResizing(false);
+      cleanup();
       try { localStorage.setItem(WIDTH_KEY, String(lastWidth)); } catch { /* quota or disabled */ }
     };
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
+    dragCleanupRef.current = cleanup;
   };
 
   useEffect(() => {
