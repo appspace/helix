@@ -45,7 +45,13 @@ export function InsertRowDialog({ table, columns, onSubmit, onClose, t }: Insert
   const editable = useMemo(() => columns.filter(c => !c.autoIncrement), [columns]);
   const initialDrafts = useMemo(() => {
     const out: Record<string, string> = {};
-    for (const c of editable) out[c.name] = '';
+    for (const c of editable) {
+      // A NOT NULL boolean with no server default has no blank-state option in
+      // its <select> (otherwise the user would see "— select —" pre-selected
+      // and submitting would always fail with "Required column"). Seed it to
+      // 'false' so the visible state matches what we'll send.
+      out[c.name] = isBooleanColumn(c) && !c.nullable && c.default === null ? 'false' : '';
+    }
     return out;
   }, [editable]);
 
@@ -175,7 +181,9 @@ export function InsertRowDialog({ table, columns, onSubmit, onClose, t }: Insert
                           onChange={(e) => setDrafts(p => ({ ...p, [col.name]: e.target.value }))}
                           style={s.input}
                         >
-                          <option value="">{blankLabel || '— select —'}</option>
+                          {(col.default !== null || col.nullable) && (
+                            <option value="">{blankLabel}</option>
+                          )}
                           <option value="true">true</option>
                           <option value="false">false</option>
                         </select>
