@@ -33,6 +33,11 @@ describe('formatSqlValue', () => {
   it('handles empty string', () => {
     expect(formatSqlValue('')).toBe("''");
   });
+
+  it('renders true/false for booleans', () => {
+    expect(formatSqlValue(true)).toBe('true');
+    expect(formatSqlValue(false)).toBe('false');
+  });
 });
 
 describe('buildInsertSql', () => {
