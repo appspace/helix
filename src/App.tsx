@@ -374,7 +374,6 @@ export default function App() {
   const bodyStyle: CSSProperties = { display: 'flex', flex: 1, overflow: 'hidden' };
   const mainStyle: CSSProperties = { display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' };
 
-  const handleDismissModal = useCallback(() => setShowConnectionModal(false), []);
   const handleOpenConnection = useCallback(() => setShowConnectionModal(true), []);
 
   return (
@@ -453,7 +452,6 @@ export default function App() {
           onConnect={handleConnect}
           isConnecting={isConnecting}
           error={connectionError}
-          onDismiss={handleDismissModal}
           t={t}
         />
       )}
