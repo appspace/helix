@@ -68,6 +68,10 @@ function fromDatetimeLocal(v: string): string {
 
 interface ResultsTableProps {
   results: QueryResults | null;
+  /** Every result set returned by the last run; `results` mirrors the active one. */
+  resultSets?: QueryResults[];
+  activeResultIndex?: number;
+  onSelectResultIndex?: (index: number) => void;
   isRunning: boolean;
   error: string | null;
   executionTime: number | null;
@@ -308,7 +312,7 @@ function resolveDeleteTarget(row: Row, columnMeta: ColumnMeta[] | undefined): De
   };
 }
 
-export function ResultsTable({ results, isRunning, error, executionTime, activeSchema, schemaData, onDeleteRow, onUpdateCell, onInsertRow, t }: ResultsTableProps) {
+export function ResultsTable({ results, resultSets, activeResultIndex = 0, onSelectResultIndex, isRunning, error, executionTime, activeSchema, schemaData, onDeleteRow, onUpdateCell, onInsertRow, t }: ResultsTableProps) {
   const [sortCol, setSortCol] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [selectedRow, setSelectedRow] = useState<number | null>(null);
@@ -622,12 +626,25 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
   return (
     <div style={s.root}>
       <div style={s.tabBar}>
-        <div style={s.tabActive}>
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M3 3h18v5H3zM3 8h18v5H3zM3 13h18v8H3z"/>
-          </svg>
-          Result 1
-        </div>
+        {(resultSets && resultSets.length > 1
+          ? resultSets.map((_, i) => ({ label: `Result ${i + 1}`, index: i }))
+          : [{ label: 'Result 1', index: 0 }]
+        ).map(({ label, index }) => {
+          const active = index === activeResultIndex;
+          return (
+            <div
+              key={index}
+              style={active ? s.tabActive : s.tabInactive}
+              onClick={() => { if (!active && onSelectResultIndex) onSelectResultIndex(index); }}
+              role={onSelectResultIndex ? 'button' : undefined}
+            >
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 3h18v5H3zM3 8h18v5H3zM3 13h18v8H3z"/>
+              </svg>
+              {label}
+            </div>
+          );
+        })}
         <div style={s.tabInactive}>
           <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
