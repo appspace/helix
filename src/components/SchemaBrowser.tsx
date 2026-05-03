@@ -67,6 +67,21 @@ function NonTableGroupItems({ groupKey, label, schema, filter, t, emptyStyle, ro
   ))}</>;
 }
 
+const WIDTH_KEY = 'helix.schemaBrowser.width';
+const MIN_WIDTH = 160;
+const MAX_WIDTH = 600;
+const DEFAULT_WIDTH = 224;
+
+function readStoredWidth(): number {
+  try {
+    const v = localStorage.getItem(WIDTH_KEY);
+    const n = v ? parseInt(v, 10) : NaN;
+    return Number.isFinite(n) && n >= MIN_WIDTH && n <= MAX_WIDTH ? n : DEFAULT_WIDTH;
+  } catch {
+    return DEFAULT_WIDTH;
+  }
+}
+
 export function SchemaBrowser({ schema, activeTable, onTableSelect, onSchemaChange, schemas, activeSchema, onDropTable, t }: SchemaBrowserProps) {
   const [expanded, setExpanded] = useState({ tables: true, views: false, procedures: false, triggers: false });
   const [expandedTables, setExpandedTables] = useState<Record<string, boolean>>({});
@@ -74,7 +89,52 @@ export function SchemaBrowser({ schema, activeTable, onTableSelect, onSchemaChan
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; name: string; type: ObjectType } | null>(null);
   const [showSchemaFor, setShowSchemaFor] = useState<{ name: string; type: ObjectType } | null>(null);
   const [confirmDrop, setConfirmDrop] = useState<ConfirmDrop | null>(null);
+  const [width, setWidth] = useState<number>(readStoredWidth);
+  const [resizing, setResizing] = useState(false);
   const dropInputRef = useRef<HTMLInputElement>(null);
+
+  // Holds the teardown for an in-flight drag so the unmount cleanup below can
+  // remove the window listeners and restore body styles even if the user
+  // disconnects (or otherwise unmounts the browser) mid-drag.
+  const dragCleanupRef = useRef<(() => void) | null>(null);
+  useEffect(() => () => { dragCleanupRef.current?.(); }, []);
+
+  const onResizeStart = (e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    setResizing(true);
+    const startX = e.clientX;
+    const startWidth = width;
+    let lastWidth = startWidth;
+
+    // Lock document-level cursor + selection so the browser doesn't start
+    // selecting text — and flip the cursor away from col-resize — once the
+    // pointer leaves the 5px handle during a drag.
+    const prevUserSelect = document.body.style.userSelect;
+    const prevCursor = document.body.style.cursor;
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'col-resize';
+
+    const onMove = (ev: MouseEvent) => {
+      lastWidth = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, startWidth + (ev.clientX - startX)));
+      setWidth(lastWidth);
+    };
+    const cleanup = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      document.body.style.userSelect = prevUserSelect;
+      document.body.style.cursor = prevCursor;
+      dragCleanupRef.current = null;
+    };
+    const onUp = () => {
+      setResizing(false);
+      cleanup();
+      try { localStorage.setItem(WIDTH_KEY, String(lastWidth)); } catch { /* quota or disabled */ }
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    dragCleanupRef.current = cleanup;
+  };
 
   useEffect(() => {
     if (!contextMenu) return;
@@ -100,7 +160,8 @@ export function SchemaBrowser({ schema, activeTable, onTableSelect, onSchemaChan
   const toggleTable = (name: string) => setExpandedTables(p => ({ ...p, [name]: !p[name] }));
 
   const s = {
-    root: { width: 224, background: t.bgSurface, borderRight: `1px solid ${t.border}`, display: 'flex', flexDirection: 'column', overflow: 'hidden', flexShrink: 0 } as CSSProperties,
+    root: { width, position: 'relative', background: t.bgSurface, borderRight: `1px solid ${t.border}`, display: 'flex', flexDirection: 'column', overflow: 'hidden', flexShrink: 0 } as CSSProperties,
+    resizeHandle: { position: 'absolute', top: 0, right: 0, width: 5, height: '100%', cursor: 'col-resize', zIndex: 10, background: resizing ? t.accent : 'transparent', transition: resizing ? 'none' : 'background 120ms', userSelect: 'none' } as CSSProperties,
     header: { padding: '8px 10px', borderBottom: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, background: t.bgToolbar } as CSSProperties,
     schemaSelect: { flex: 1, background: 'transparent', border: 'none', outline: 'none', font: `500 12px/1 "IBM Plex Sans", sans-serif`, color: t.textPrimary, cursor: 'pointer', minWidth: 0 } as CSSProperties,
     searchWrap: { padding: '6px 10px', borderBottom: `1px solid ${t.borderSubtle}`, display: 'flex', alignItems: 'center', gap: 7, flexShrink: 0 } as CSSProperties,
@@ -131,6 +192,13 @@ export function SchemaBrowser({ schema, activeTable, onTableSelect, onSchemaChan
 
   return (
     <div style={s.root}>
+      <div
+        style={s.resizeHandle}
+        onMouseDown={onResizeStart}
+        onMouseEnter={(e) => { if (!resizing) e.currentTarget.style.background = t.accent; }}
+        onMouseLeave={(e) => { if (!resizing) e.currentTarget.style.background = 'transparent'; }}
+        title="Drag to resize"
+      />
       <div style={s.header}>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={t.textMuted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{flexShrink:0}}>
           <ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
