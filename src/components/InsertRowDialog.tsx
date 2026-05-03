@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import type { CSSProperties } from 'react';
 import type { Theme } from '../theme';
 import type { SchemaColumn } from '../api';
-import { buildInsertSql } from '../lib/sql';
+import { buildInsertSql, parseEnumValues } from '../lib/sql';
 
 type CellValue = string | number | boolean | null;
 type EditKind = 'boolean' | 'number' | 'date' | 'datetime' | 'time' | 'text';
@@ -156,12 +156,14 @@ export function InsertRowDialog({ table, columns, onSubmit, onClose, t }: Insert
               )}
               {editable.map(col => {
                 const kind = editKindForColumn(col);
+                const enumValues = col.dataType === 'enum' ? parseEnumValues(col.type) : null;
                 const inputType = kind === 'number' ? 'number'
                   : kind === 'date' ? 'date'
                   : kind === 'datetime' ? 'datetime-local'
                   : kind === 'time' ? 'time'
                   : 'text';
                 const required = !col.nullable && col.default === null;
+                const hasBlankOption = col.default !== null || col.nullable;
                 const blankLabel = col.default !== null ? `default: ${col.default}`
                   : col.nullable ? 'NULL'
                   : '';
@@ -181,11 +183,28 @@ export function InsertRowDialog({ table, columns, onSubmit, onClose, t }: Insert
                           onChange={(e) => setDrafts(p => ({ ...p, [col.name]: e.target.value }))}
                           style={s.input}
                         >
-                          {(col.default !== null || col.nullable) && (
+                          {hasBlankOption && (
                             <option value="">{blankLabel}</option>
                           )}
                           <option value="true">true</option>
                           <option value="false">false</option>
+                        </select>
+                      ) : enumValues ? (
+                        <select
+                          value={drafts[col.name] ?? ''}
+                          onChange={(e) => setDrafts(p => ({ ...p, [col.name]: e.target.value }))}
+                          style={s.input}
+                        >
+                          {hasBlankOption ? (
+                            <option value="">{blankLabel}</option>
+                          ) : (
+                            // Disabled placeholder keeps the visible state aligned with the
+                            // empty draft, so the browser doesn't silently surface the first
+                            // enum value while still routing through the "Required column"
+                            // validator if the user hits Review SQL without picking.
+                            <option value="" disabled>— select —</option>
+                          )}
+                          {enumValues.map(v => <option key={v} value={v}>{v}</option>)}
                         </select>
                       ) : (
                         <input
