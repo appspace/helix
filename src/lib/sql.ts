@@ -1,4 +1,4 @@
-type CellValue = string | number | null;
+type CellValue = string | number | boolean | null;
 
 export function formatSqlValue(v: CellValue): string {
   if (v === null) return 'NULL';

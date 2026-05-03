@@ -4,11 +4,16 @@ import type { Theme } from '../theme';
 import type { SchemaColumn } from '../api';
 import { buildInsertSql } from '../lib/sql';
 
-type CellValue = string | number | null;
-type EditKind = 'number' | 'date' | 'datetime' | 'time' | 'text';
+type CellValue = string | number | boolean | null;
+type EditKind = 'boolean' | 'number' | 'date' | 'datetime' | 'time' | 'text';
 
-function editKindForDataType(dataType: string): EditKind {
-  switch (dataType) {
+function isBooleanColumn(c: SchemaColumn): boolean {
+  return c.type === 'tinyint(1)';
+}
+
+function editKindForColumn(c: SchemaColumn): EditKind {
+  if (isBooleanColumn(c)) return 'boolean';
+  switch (c.dataType) {
     case 'tinyint': case 'smallint': case 'mediumint': case 'int': case 'bigint':
     case 'decimal': case 'float': case 'double': case 'year':
       return 'number';
@@ -40,7 +45,13 @@ export function InsertRowDialog({ table, columns, onSubmit, onClose, t }: Insert
   const editable = useMemo(() => columns.filter(c => !c.autoIncrement), [columns]);
   const initialDrafts = useMemo(() => {
     const out: Record<string, string> = {};
-    for (const c of editable) out[c.name] = '';
+    for (const c of editable) {
+      // A NOT NULL boolean with no server default has no blank-state option in
+      // its <select> (otherwise the user would see "— select —" pre-selected
+      // and submitting would always fail with "Required column"). Seed it to
+      // 'false' so the visible state matches what we'll send.
+      out[c.name] = isBooleanColumn(c) && !c.nullable && c.default === null ? 'false' : '';
+    }
     return out;
   }, [editable]);
 
@@ -64,14 +75,15 @@ export function InsertRowDialog({ table, columns, onSubmit, onClose, t }: Insert
     const missing: string[] = [];
     for (const c of editable) {
       const raw = drafts[c.name];
-      const kind = editKindForDataType(c.dataType);
+      const kind = editKindForColumn(c);
       if (raw === '' || raw === undefined) {
         if (c.default !== null) continue; // server-side default will fill in
         if (c.nullable) { values[c.name] = null; continue; }
         missing.push(c.name);
         continue;
       }
-      if (kind === 'number') values[c.name] = Number(raw);
+      if (kind === 'boolean') values[c.name] = raw === 'true';
+      else if (kind === 'number') values[c.name] = Number(raw);
       else if (kind === 'datetime') values[c.name] = fromDatetimeLocal(raw);
       else values[c.name] = raw;
     }
@@ -143,13 +155,16 @@ export function InsertRowDialog({ table, columns, onSubmit, onClose, t }: Insert
                 </div>
               )}
               {editable.map(col => {
-                const kind = editKindForDataType(col.dataType);
+                const kind = editKindForColumn(col);
                 const inputType = kind === 'number' ? 'number'
                   : kind === 'date' ? 'date'
                   : kind === 'datetime' ? 'datetime-local'
                   : kind === 'time' ? 'time'
                   : 'text';
                 const required = !col.nullable && col.default === null;
+                const blankLabel = col.default !== null ? `default: ${col.default}`
+                  : col.nullable ? 'NULL'
+                  : '';
                 return (
                   <div key={col.name} style={s.row}>
                     <div>
@@ -160,18 +175,28 @@ export function InsertRowDialog({ table, columns, onSubmit, onClose, t }: Insert
                       <div style={s.labelMuted}>{col.type}{col.pk ? ' · PK' : ''}</div>
                     </div>
                     <div>
-                      <input
-                        type={inputType}
-                        value={drafts[col.name] ?? ''}
-                        step={kind === 'number' ? 'any' : undefined}
-                        onChange={(e) => setDrafts(p => ({ ...p, [col.name]: e.target.value }))}
-                        placeholder={
-                          col.default !== null ? `default: ${col.default}` :
-                          col.nullable ? 'NULL' :
-                          ''
-                        }
-                        style={s.input}
-                      />
+                      {kind === 'boolean' ? (
+                        <select
+                          value={drafts[col.name] ?? ''}
+                          onChange={(e) => setDrafts(p => ({ ...p, [col.name]: e.target.value }))}
+                          style={s.input}
+                        >
+                          {(col.default !== null || col.nullable) && (
+                            <option value="">{blankLabel}</option>
+                          )}
+                          <option value="true">true</option>
+                          <option value="false">false</option>
+                        </select>
+                      ) : (
+                        <input
+                          type={inputType}
+                          value={drafts[col.name] ?? ''}
+                          step={kind === 'number' ? 'any' : undefined}
+                          onChange={(e) => setDrafts(p => ({ ...p, [col.name]: e.target.value }))}
+                          placeholder={blankLabel}
+                          style={s.input}
+                        />
+                      )}
                       {col.comment && <div style={s.helper}>{col.comment}</div>}
                     </div>
                   </div>
