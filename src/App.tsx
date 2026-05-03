@@ -19,6 +19,12 @@ interface Tab {
   name: string;
   query: string;
   modified?: boolean;
+  // Set when the tab was opened by clicking a table in the sidebar.
+  // Used to dedupe table-clicks per (schema, table), independent of the
+  // tab's display name — so a saved query that happens to be called
+  // `users` can't collide with a `users` table in some schema, and the
+  // same table name in two different schemas gets its own tab.
+  sourceTable?: { schema: string; table: string };
   results?: QueryResults | null;
   queryError?: string | null;
   execTime?: number | null;
@@ -319,10 +325,10 @@ export default function App() {
     setTabs(ts => ts.map(tab => tab.id === activeTab ? { ...tab, query: val, modified: true } : tab));
   };
 
-  const addTab = (name: string, query: string) => {
+  const addTab = (name: string, query: string, sourceTable?: { schema: string; table: string }) => {
     tabCounter.current++;
     const id = String(tabCounter.current);
-    setTabs(ts => [...ts, { id, name, query }]);
+    setTabs(ts => [...ts, { id, name, query, sourceTable }]);
     setActiveTab(id);
     return id;
   };
@@ -339,22 +345,31 @@ export default function App() {
 
   const handleTableSelect = (name: string) => {
     setActiveTable(name);
-    const tabName = queryMode === 'mql' ? `${name}.json` : `${name}.sql`;
-    const existing = tabs.find(tb => tb.name === tabName);
+    const existing = tabs.find(tb => tb.sourceTable?.schema === activeSchema && tb.sourceTable?.table === name);
     if (existing) {
       setActiveTab(existing.id);
       return;
     }
+    const source = { schema: activeSchema, table: name };
     if (queryMode === 'mql') {
       const body = JSON.stringify({ collection: name, operation: 'find', filter: {}, limit: 100 }, null, 2);
-      addTab(tabName, body);
+      addTab(`${name}.json`, body, source);
     } else {
-      addTab(tabName, `SELECT *\nFROM \`${name}\`\nLIMIT 100;`);
+      addTab(`${name}.sql`, `SELECT *\nFROM \`${name}\`\nLIMIT 100;`, source);
     }
   };
 
   const switchTab = (id: string) => {
     setActiveTab(id);
+    // Sync the schema-browser highlight with the tab the user landed on:
+    // light up the bound table when the target tab came from a sidebar
+    // click in the current schema, otherwise clear the highlight.
+    const target = tabs.find(tb => tb.id === id);
+    if (target?.sourceTable && target.sourceTable.schema === activeSchema) {
+      setActiveTable(target.sourceTable.table);
+    } else {
+      setActiveTable(null);
+    }
   };
 
   const toggleTheme = () => {
