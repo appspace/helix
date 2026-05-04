@@ -24,19 +24,27 @@ export class PostgresDriver implements DbDriver {
   readonly queryMode = 'sql' as const;
   private pool: pg.Pool;
   private config: ConnectionConfig;
+  private recycling: Promise<void> | null = null;
 
   constructor(config: ConnectionConfig) {
     this.config = config;
     this.pool = new pg.Pool(buildPgPoolConfig(config));
   }
 
-  /**
-   * Drop the current pool and rebuild it from the saved config. See `MysqlDriver.recyclePool`.
-   */
-  async recyclePool(): Promise<void> {
+  /** See `MysqlDriver.recyclePool`. pg's `pool.end()` is stricter than mysql2's
+   * (waits for every checked-out client to be released), which makes the
+   * fire-and-forget on `old.end()` even more important here. */
+  recyclePool(): Promise<void> {
+    if (this.recycling) return this.recycling;
     const old = this.pool;
     this.pool = new pg.Pool(buildPgPoolConfig(this.config));
-    try { await old.end(); } catch { /* old clients may already be dead — swallow */ }
+    void old.end().catch(() => { /* dead clients — nothing to do */ });
+    this.recycling = this.pool
+      .connect()
+      .then(c => c.release())
+      .catch(() => { /* will surface on the user's next query */ })
+      .finally(() => { this.recycling = null; });
+    return this.recycling;
   }
 
   escapeIdent(s: string): string {

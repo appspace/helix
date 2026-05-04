@@ -52,17 +52,32 @@ describe('MysqlDriver.recyclePool', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockPool.getConnection.mockResolvedValue(mockConn);
+    // recyclePool fire-and-forgets `old.end()` via `.catch()`, so the mock has
+    // to return a real promise; bare vi.fn() returns undefined.
+    mockPool.end.mockResolvedValue(undefined);
   });
 
-  it('replaces the pool and ends the old one', async () => {
-    const mysqlMod = (await import('mysql2/promise')).default as unknown as { createPool: ReturnType<typeof vi.fn> };
+  async function getCreatePoolMock() {
+    const mod = (await import('mysql2/promise')).default as unknown as { createPool: ReturnType<typeof vi.fn> };
+    return mod.createPool;
+  }
+
+  // Hand each createPool call a distinct pool instance so a test can assert
+  // that operations after recycle target the *new* pool, not the old one.
+  async function stubPoolsPerCreate(...pools: typeof mockPool[]) {
+    const cp = await getCreatePoolMock();
+    let i = 0;
+    cp.mockImplementation(() => pools[Math.min(i++, pools.length - 1)]);
+  }
+
+  it('builds a fresh pool and ends the old one', async () => {
+    const cp = await getCreatePoolMock();
     const driver = makeDriver();
-    expect(mysqlMod.createPool).toHaveBeenCalledTimes(1);
+    expect(cp).toHaveBeenCalledTimes(1);
 
     mockPool.end.mockResolvedValueOnce(undefined);
     await driver.recyclePool();
-    // One createPool call for the constructor, one for the recycle.
-    expect(mysqlMod.createPool).toHaveBeenCalledTimes(2);
+    expect(cp).toHaveBeenCalledTimes(2);
     expect(mockPool.end).toHaveBeenCalledTimes(1);
   });
 
@@ -72,12 +87,56 @@ describe('MysqlDriver.recyclePool', () => {
     await expect(driver.recyclePool()).resolves.toBeUndefined();
   });
 
+  it('routes operations after recycle to the new pool, not the old one', async () => {
+    const oldPool = { ...mockPool, getConnection: vi.fn(), query: vi.fn(), end: vi.fn().mockResolvedValue(undefined) };
+    const newPool = { ...mockPool, getConnection: vi.fn().mockResolvedValue(mockConn), query: vi.fn(), end: vi.fn() };
+    await stubPoolsPerCreate(oldPool, newPool);
+
+    const driver = makeDriver();
+    await driver.recyclePool();
+
+    // recyclePool's pre-warm itself takes one connection on the new pool.
+    const beforeQuery = newPool.getConnection.mock.calls.length;
+    mockConn.query.mockResolvedValueOnce([[{ ok: 1 }], [{ name: 'ok' }]]);
+    await driver.query('SELECT 1');
+
+    expect(newPool.getConnection.mock.calls.length).toBeGreaterThan(beforeQuery);
+    expect(oldPool.getConnection).not.toHaveBeenCalled();
+  });
+
+  it('pre-warms the new pool so the next user query skips the connect cost', async () => {
+    const cp = await getCreatePoolMock();
+    const newPool = { ...mockPool, getConnection: vi.fn().mockResolvedValue(mockConn), query: vi.fn(), end: vi.fn() };
+    cp.mockImplementationOnce(() => mockPool).mockImplementationOnce(() => newPool);
+
+    const driver = makeDriver();
+    await driver.recyclePool();
+
+    expect(newPool.getConnection).toHaveBeenCalledTimes(1);
+    expect(mockConn.release).toHaveBeenCalled();
+  });
+
+  it('coalesces concurrent recycle calls so a duplicate event does not orphan a pool', async () => {
+    const cp = await getCreatePoolMock();
+    cp.mockImplementation(() => mockPool);
+    mockPool.end.mockResolvedValue(undefined);
+    const driver = makeDriver();
+    cp.mockClear();
+
+    // Two host-resumed events fire before the first recycle settles.
+    const a = driver.recyclePool();
+    const b = driver.recyclePool();
+    expect(a).toBe(b); // same in-flight promise — no second pool built
+    await Promise.all([a, b]);
+    expect(cp).toHaveBeenCalledTimes(1);
+  });
+
   it('configures TCP keepalive on the pool so post-resume sockets are detected', async () => {
-    const mysqlMod = (await import('mysql2/promise')).default as unknown as { createPool: ReturnType<typeof vi.fn> };
-    mysqlMod.createPool.mockClear();
+    const cp = await getCreatePoolMock();
+    cp.mockClear();
     makeDriver();
-    expect(mysqlMod.createPool).toHaveBeenCalledTimes(1);
-    const opts = mysqlMod.createPool.mock.calls[0][0];
+    expect(cp).toHaveBeenCalledTimes(1);
+    const opts = cp.mock.calls[0][0];
     expect(opts.enableKeepAlive).toBe(true);
     expect(opts.keepAliveInitialDelay).toBe(10_000);
   });
