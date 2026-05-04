@@ -65,6 +65,12 @@ export class MysqlDriver implements DbDriver {
       const NOT_NULL_FLAG = 1;
       const PRI_KEY_FLAG = 2;
       const UNIQUE_KEY_FLAG = 4;
+      const MYSQL_TYPE_BIT = 16;
+
+      const bitColumns = new Set<string>();
+      for (const f of fields) {
+        if ((f.columnType ?? f.type) === MYSQL_TYPE_BIT) bitColumns.add(f.name);
+      }
 
       const columnMeta: ColumnMeta[] = fields.map(f => {
         let flagsNum = 0;
@@ -95,7 +101,13 @@ export class MysqlDriver implements DbDriver {
           if (val === null || val === undefined) {
             out[col] = null;
           } else if (Buffer.isBuffer(val)) {
-            out[col] = val.toString('hex');
+            if (bitColumns.has(col) && val.length <= 6) {
+              let n = 0;
+              for (const byte of val) n = n * 256 + byte;
+              out[col] = n;
+            } else {
+              out[col] = val.toString('hex');
+            }
           } else if (val instanceof Date) {
             out[col] = val.toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '');
           } else if (typeof val === 'bigint') {

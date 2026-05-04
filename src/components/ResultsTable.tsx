@@ -4,6 +4,7 @@ import type { Theme } from '../theme';
 import type { ColumnMeta, SchemaData } from '../api';
 import { InsertRowDialog } from './InsertRowDialog';
 import { rowsToCsv, rowsToJson, downloadBlob, sanitizeFilename } from '../export';
+import { formatSqlValue } from '../lib/sql';
 
 // MongoDB documents arrive with nested objects/arrays in cell values.
 // Other drivers always emit primitives. We type the row map permissively so
@@ -90,7 +91,7 @@ function isBoolColumn(schemaData: SchemaData | undefined, meta: ColumnMeta | und
   if (!schemaData || !meta?.orgTable || !meta.orgName) return false;
   const table = schemaData.tables.find(x => x.name === meta.orgTable);
   const col = table?.columns.find(c => c.name === meta.orgName);
-  return col?.type === 'tinyint(1)';
+  return col?.type === 'tinyint(1)' || col?.type === 'bit(1)';
 }
 
 function cellDisplayValue(
@@ -1270,7 +1271,7 @@ export function ResultsTable({ results, isRunning, error, executionTime, activeS
               fontFamily: '"JetBrains Mono", monospace', color: t.textPrimary,
               whiteSpace: 'pre-wrap', wordBreak: 'break-all',
             }}>
-{`UPDATE \`${confirmUpdate.target.table}\`\nSET \`${confirmUpdate.target.column}\` = ${confirmUpdate.target.value === null ? 'NULL' : JSON.stringify(confirmUpdate.target.value)}\nWHERE ${confirmUpdate.target.where.map(w => `\`${w.column}\` = ${JSON.stringify(w.value)}`).join(' AND ')}\nLIMIT 1;`}
+{`UPDATE \`${confirmUpdate.target.table}\`\nSET \`${confirmUpdate.target.column}\` = ${formatSqlValue(confirmUpdate.target.value)}\nWHERE ${confirmUpdate.target.where.map(w => `\`${w.column}\` = ${formatSqlValue(w.value)}`).join(' AND ')}\nLIMIT 1;`}
             </pre>
             {confirmUpdate.error && (
               <div style={{
