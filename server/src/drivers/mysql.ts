@@ -2,24 +2,47 @@ import mysql from 'mysql2/promise';
 import type { RowDataPacket, FieldPacket, ResultSetHeader } from 'mysql2/promise';
 import type { DbDriver, ConnectionConfig, QueryResult, ColumnMeta, ColumnInfo, SchemaInfo, TableInfo } from './interface.js';
 
+function buildMysqlPoolOptions(config: ConnectionConfig): mysql.PoolOptions {
+  return {
+    host: config.host,
+    port: config.port,
+    user: config.user,
+    password: config.password,
+    database: config.database || undefined,
+    ssl: config.ssl === 'verify-full' ? { rejectUnauthorized: true }
+       : config.ssl === 'require'     ? { rejectUnauthorized: false }
+       : undefined,
+    waitForConnections: true,
+    connectionLimit: 5,
+    connectTimeout: 10_000,
+    // OS-level TCP keepalive — without this, dead sockets after macOS sleep
+    // are only surfaced by the kernel's default ~2-hour timer, which causes
+    // the first post-resume query to hang. See #145.
+    enableKeepAlive: true,
+    keepAliveInitialDelay: 10_000,
+  };
+}
+
 export class MysqlDriver implements DbDriver {
   readonly queryMode = 'sql' as const;
   private pool: mysql.Pool;
 
+  private config: ConnectionConfig;
+
   constructor(config: ConnectionConfig) {
-    this.pool = mysql.createPool({
-      host: config.host,
-      port: config.port,
-      user: config.user,
-      password: config.password,
-      database: config.database || undefined,
-      ssl: config.ssl === 'verify-full' ? { rejectUnauthorized: true }
-         : config.ssl === 'require'     ? { rejectUnauthorized: false }
-         : undefined,
-      waitForConnections: true,
-      connectionLimit: 5,
-      connectTimeout: 10_000,
-    });
+    this.config = config;
+    this.pool = mysql.createPool(buildMysqlPoolOptions(config));
+  }
+
+  /**
+   * Drop the current pool and rebuild it from the saved config. Used after the
+   * machine resumes from sleep — every pre-existing socket is dead but the
+   * pool would happily hand it back to the next query, hanging the request.
+   */
+  async recyclePool(): Promise<void> {
+    const old = this.pool;
+    this.pool = mysql.createPool(buildMysqlPoolOptions(this.config));
+    try { await old.end(); } catch { /* old pool sockets are likely dead — swallow */ }
   }
 
   escapeIdent(s: string): string {

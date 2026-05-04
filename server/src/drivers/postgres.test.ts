@@ -68,3 +68,36 @@ describe('PostgresDriver.query – connection release', () => {
     expect(mockClient.release).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('PostgresDriver.recyclePool', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('replaces the pool and ends the old one', async () => {
+    const pgMod = (await import('pg')).default as unknown as { Pool: ReturnType<typeof vi.fn> };
+    const driver = makeDriver();
+    expect(pgMod.Pool).toHaveBeenCalledTimes(1);
+
+    mockPoolInstance.end.mockResolvedValueOnce(undefined);
+    await driver.recyclePool();
+    expect(pgMod.Pool).toHaveBeenCalledTimes(2);
+    expect(mockPoolInstance.end).toHaveBeenCalledTimes(1);
+  });
+
+  it('swallows errors from the old pool — its clients may already be dead', async () => {
+    const driver = makeDriver();
+    mockPoolInstance.end.mockRejectedValueOnce(new Error('client closed'));
+    await expect(driver.recyclePool()).resolves.toBeUndefined();
+  });
+
+  it('configures TCP keepalive on the pool', async () => {
+    const pgMod = (await import('pg')).default as unknown as { Pool: ReturnType<typeof vi.fn> };
+    pgMod.Pool.mockClear();
+    makeDriver();
+    expect(pgMod.Pool).toHaveBeenCalledTimes(1);
+    const cfg = pgMod.Pool.mock.calls[0][0];
+    expect(cfg.keepAlive).toBe(true);
+    expect(cfg.keepAliveInitialDelayMillis).toBe(10_000);
+  });
+});

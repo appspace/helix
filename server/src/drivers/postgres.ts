@@ -1,23 +1,42 @@
 import pg from 'pg';
 import type { DbDriver, ConnectionConfig, QueryResult, ColumnMeta, ColumnInfo, SchemaInfo, TableInfo } from './interface.js';
 
+function buildPgPoolConfig(config: ConnectionConfig): pg.PoolConfig {
+  return {
+    host: config.host,
+    port: config.port,
+    user: config.user,
+    password: config.password,
+    database: config.database || undefined,
+    ssl: config.ssl === 'verify-full' ? { rejectUnauthorized: true }
+       : config.ssl === 'require'     ? { rejectUnauthorized: false }
+       : undefined,
+    max: 5,
+    connectionTimeoutMillis: 10_000,
+    // OS-level TCP keepalive so dead sockets after macOS sleep are surfaced
+    // in seconds rather than the kernel's default ~2 hours. See #145.
+    keepAlive: true,
+    keepAliveInitialDelayMillis: 10_000,
+  };
+}
+
 export class PostgresDriver implements DbDriver {
   readonly queryMode = 'sql' as const;
   private pool: pg.Pool;
+  private config: ConnectionConfig;
 
   constructor(config: ConnectionConfig) {
-    this.pool = new pg.Pool({
-      host: config.host,
-      port: config.port,
-      user: config.user,
-      password: config.password,
-      database: config.database || undefined,
-      ssl: config.ssl === 'verify-full' ? { rejectUnauthorized: true }
-         : config.ssl === 'require'     ? { rejectUnauthorized: false }
-         : undefined,
-      max: 5,
-      connectionTimeoutMillis: 10_000,
-    });
+    this.config = config;
+    this.pool = new pg.Pool(buildPgPoolConfig(config));
+  }
+
+  /**
+   * Drop the current pool and rebuild it from the saved config. See `MysqlDriver.recyclePool`.
+   */
+  async recyclePool(): Promise<void> {
+    const old = this.pool;
+    this.pool = new pg.Pool(buildPgPoolConfig(this.config));
+    try { await old.end(); } catch { /* old clients may already be dead — swallow */ }
   }
 
   escapeIdent(s: string): string {

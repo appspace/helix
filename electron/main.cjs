@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, Tray, Menu, nativeImage, utilityProcess, dialog, ipcMain, safeStorage } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, utilityProcess, dialog, ipcMain, safeStorage, powerMonitor } = require('electron');
 const path = require('path');
 const http = require('http');
 const fs = require('fs');
@@ -205,6 +205,15 @@ app.whenReady().then(async () => {
   }
   createWindow();
   createTray();
+
+  // Sleep kills idle TCP sockets in the pool — the OS still reports them as
+  // open, so the first post-resume query hangs on a dead socket. Notify the
+  // bundled server so it drops and rebuilds its pool. See #145. Dev mode runs
+  // its own server outside this process, so the message has no recipient and
+  // is silently dropped.
+  powerMonitor.on('resume', () => {
+    serverProc?.postMessage({ type: 'host-resumed' });
+  });
 
   app.on('activate', () => {
     if (win) win.show();

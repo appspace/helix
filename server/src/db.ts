@@ -53,6 +53,18 @@ export function isConnected(): boolean {
   return driver !== null;
 }
 
+/**
+ * Drop and rebuild the active driver's connection pool. Idempotent — no-op when
+ * not connected or when the driver doesn't pool. Used by the resume-from-sleep
+ * path so the next query opens a fresh socket; the user-facing connection state
+ * is preserved (no UI logout).
+ */
+export async function recycleActivePool(): Promise<void> {
+  if (driver?.recyclePool) {
+    await driver.recyclePool();
+  }
+}
+
 export async function testConnection(config: ConnectionConfig): Promise<void> {
   const d = makeDriver(config);
   try {
