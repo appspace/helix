@@ -11,6 +11,7 @@ import { getTableDdl } from './routes/tableDdl.js';
 import { postDropTable } from './routes/dropTable.js';
 import { getMcpStatus, postMcpWrites } from './routes/mcpSettings.js';
 import { mcpHandler } from './mcp.js';
+import { recycleActivePool } from './db.js';
 
 const app = express();
 const PORT = process.env['PORT'] ?? 3001;
@@ -56,3 +57,18 @@ app.listen(PORT, () => {
   console.log(`Helix server running at http://localhost:${PORT}`);
   console.log(`MCP endpoint:        http://localhost:${PORT}/mcp`);
 });
+
+// When forked as an Electron utilityProcess, listen for the host process's
+// power events. After resume the active pool's sockets are dead — recycle so
+// the next query opens fresh ones. Standalone runs have no parentPort, so this
+// is a no-op outside Electron.
+const parentPort = (process as unknown as { parentPort?: { on(ev: 'message', fn: (msg: unknown) => void): void } }).parentPort;
+if (parentPort) {
+  parentPort.on('message', (msg: unknown) => {
+    if (msg && typeof msg === 'object' && (msg as { type?: string }).type === 'host-resumed') {
+      recycleActivePool().catch(err => {
+        console.error('[helix] recycleActivePool failed:', err);
+      });
+    }
+  });
+}

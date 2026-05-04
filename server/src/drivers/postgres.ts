@@ -1,23 +1,50 @@
 import pg from 'pg';
 import type { DbDriver, ConnectionConfig, QueryResult, ColumnMeta, ColumnInfo, SchemaInfo, TableInfo } from './interface.js';
 
+function buildPgPoolConfig(config: ConnectionConfig): pg.PoolConfig {
+  return {
+    host: config.host,
+    port: config.port,
+    user: config.user,
+    password: config.password,
+    database: config.database || undefined,
+    ssl: config.ssl === 'verify-full' ? { rejectUnauthorized: true }
+       : config.ssl === 'require'     ? { rejectUnauthorized: false }
+       : undefined,
+    max: 5,
+    connectionTimeoutMillis: 10_000,
+    // OS-level TCP keepalive so dead sockets after macOS sleep are surfaced
+    // in seconds rather than the kernel's default ~2 hours. See #145.
+    keepAlive: true,
+    keepAliveInitialDelayMillis: 10_000,
+  };
+}
+
 export class PostgresDriver implements DbDriver {
   readonly queryMode = 'sql' as const;
   private pool: pg.Pool;
+  private config: ConnectionConfig;
+  private recycling: Promise<void> | null = null;
 
   constructor(config: ConnectionConfig) {
-    this.pool = new pg.Pool({
-      host: config.host,
-      port: config.port,
-      user: config.user,
-      password: config.password,
-      database: config.database || undefined,
-      ssl: config.ssl === 'verify-full' ? { rejectUnauthorized: true }
-         : config.ssl === 'require'     ? { rejectUnauthorized: false }
-         : undefined,
-      max: 5,
-      connectionTimeoutMillis: 10_000,
-    });
+    this.config = config;
+    this.pool = new pg.Pool(buildPgPoolConfig(config));
+  }
+
+  /** See `MysqlDriver.recyclePool`. pg's `pool.end()` is stricter than mysql2's
+   * (waits for every checked-out client to be released), which makes the
+   * fire-and-forget on `old.end()` even more important here. */
+  recyclePool(): Promise<void> {
+    if (this.recycling) return this.recycling;
+    const old = this.pool;
+    this.pool = new pg.Pool(buildPgPoolConfig(this.config));
+    void old.end().catch(() => { /* dead clients — nothing to do */ });
+    this.recycling = this.pool
+      .connect()
+      .then(c => c.release())
+      .catch(() => { /* will surface on the user's next query */ })
+      .finally(() => { this.recycling = null; });
+    return this.recycling;
   }
 
   escapeIdent(s: string): string {

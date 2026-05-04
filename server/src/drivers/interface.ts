@@ -87,5 +87,13 @@ export interface DbDriver {
   /** " LIMIT N" for dialects that support it in DML; "" for those that don't (e.g. Postgres). */
   rowLimitClause(n: number): string;
   ping(): Promise<void>;
+  /**
+   * Drop and rebuild any underlying connection pool. Called after the host
+   * machine resumes from sleep so the next query opens a fresh socket instead
+   * of using a dead one the OS still thinks is open. Drivers that don't pool
+   * (or self-heal) may omit this — e.g. MongoDB's SDAM monitor heartbeats every
+   * `heartbeatFrequencyMS` and re-establishes dead servers on its own.
+   */
+  recyclePool?(): Promise<void>;
   end(): Promise<void>;
 }
