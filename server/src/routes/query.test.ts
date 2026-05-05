@@ -85,6 +85,33 @@ describe('postQuery – driver delegation (sql mode)', () => {
     expect(res.body.affectedRows).toBe(3);
   });
 
+  it('uses driver.queryAll when available and exposes every result set', async () => {
+    const mockDriver = {
+      queryMode: 'sql' as const,
+      query: vi.fn(),
+      queryAll: vi.fn().mockResolvedValue([
+        { rows: [{ a: 1 }], columnMeta: [makeMeta('a')] },
+        { rows: [{ b: 2 }], columnMeta: [makeMeta('b')] },
+      ]),
+    };
+    vi.mocked(getDriver).mockReturnValue(mockDriver as any);
+
+    const res = await request(makeApp())
+      .post('/api/query')
+      .send({ sql: 'SELECT 1 AS a; SELECT 2 AS b', schema: 'mydb' });
+
+    expect(res.status).toBe(200);
+    expect(mockDriver.queryAll).toHaveBeenCalledWith('SELECT 1 AS a; SELECT 2 AS b', 'mydb');
+    expect(mockDriver.query).not.toHaveBeenCalled();
+    // Legacy fields mirror the first statement so old clients keep working.
+    expect(res.body.columns).toEqual(['a']);
+    expect(res.body.rows).toEqual([{ a: 1 }]);
+    // The new array carries every statement's rows.
+    expect(res.body.results).toHaveLength(2);
+    expect(res.body.results[0].rows).toEqual([{ a: 1 }]);
+    expect(res.body.results[1].rows).toEqual([{ b: 2 }]);
+  });
+
   it('returns 400 when driver.query() throws', async () => {
     const mockDriver = {
       queryMode: 'sql' as const,

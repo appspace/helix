@@ -92,6 +92,22 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export type QueryMode = 'sql' | 'mql';
 
+export interface QueryResultPayload {
+  columns: string[];
+  columnMeta?: ColumnMeta[];
+  rows: Record<string, unknown>[];
+  affectedRows?: number;
+  insertId?: number | null;
+}
+
+export type QueryResponse = QueryResults & {
+  columnMeta?: ColumnMeta[];
+  executionTime: number;
+  affectedRows?: number;
+  insertId?: number;
+  results?: QueryResultPayload[];
+};
+
 export const api = {
   connect(form: ConnectFormInput) {
     return request<{ ok: boolean; connectionName: string; queryMode: QueryMode }>('/api/connect', {
@@ -129,14 +145,14 @@ export const api = {
   },
 
   query(sql: string, schema: string) {
-    return request<QueryResults & { columnMeta?: ColumnMeta[]; executionTime: number; affectedRows?: number; insertId?: number }>(
+    return request<QueryResponse>(
       '/api/query',
       { method: 'POST', body: JSON.stringify({ sql, schema }) }
     );
   },
 
   queryMql(mql: unknown, schema: string) {
-    return request<QueryResults & { columnMeta?: ColumnMeta[]; executionTime: number; affectedRows?: number; insertId?: number }>(
+    return request<QueryResponse>(
       '/api/query',
       { method: 'POST', body: JSON.stringify({ mql, schema }) }
     );

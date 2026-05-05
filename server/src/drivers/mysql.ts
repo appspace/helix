@@ -15,12 +15,72 @@ function buildMysqlPoolOptions(config: ConnectionConfig): mysql.PoolOptions {
     waitForConnections: true,
     connectionLimit: 5,
     connectTimeout: 10_000,
+    multipleStatements: true,
     // OS-level TCP keepalive — without this, dead sockets after macOS sleep
     // are only surfaced by the kernel's default ~2-hour timer, which causes
     // the first post-resume query to hang. See #145.
     enableKeepAlive: true,
     keepAliveInitialDelay: 10_000,
   };
+}
+
+const MYSQL_NOT_NULL_FLAG = 1;
+const MYSQL_PRI_KEY_FLAG = 2;
+const MYSQL_UNIQUE_KEY_FLAG = 4;
+
+function buildMysqlResult(rows: RowDataPacket[] | ResultSetHeader, fields: FieldPacket[]): QueryResult {
+  if (!Array.isArray(rows)) {
+    const result = rows as ResultSetHeader;
+    return {
+      rows: [],
+      columnMeta: [],
+      affectedRows: result.affectedRows ?? 0,
+      insertId: result.insertId ?? null,
+    };
+  }
+
+  const columnMeta: ColumnMeta[] = fields.map(f => {
+    let flagsNum = 0;
+    if (typeof f.flags === 'number') {
+      flagsNum = f.flags;
+    } else if (Array.isArray(f.flags)) {
+      if ((f.flags as string[]).includes('NOT_NULL')) flagsNum |= MYSQL_NOT_NULL_FLAG;
+      if ((f.flags as string[]).includes('PRI_KEY')) flagsNum |= MYSQL_PRI_KEY_FLAG;
+      if ((f.flags as string[]).includes('UNIQUE_KEY')) flagsNum |= MYSQL_UNIQUE_KEY_FLAG;
+    }
+    return {
+      name: f.name,
+      orgName: f.orgName ?? f.name,
+      table: f.table ?? '',
+      orgTable: f.orgTable ?? '',
+      pk: (flagsNum & MYSQL_PRI_KEY_FLAG) === MYSQL_PRI_KEY_FLAG,
+      unique: (flagsNum & MYSQL_UNIQUE_KEY_FLAG) === MYSQL_UNIQUE_KEY_FLAG,
+      notNull: (flagsNum & MYSQL_NOT_NULL_FLAG) === MYSQL_NOT_NULL_FLAG,
+      mysqlType: f.columnType ?? f.type ?? 0,
+    };
+  });
+
+  const columns = fields.map(f => f.name);
+  const serializedRows = (rows as RowDataPacket[]).map(row => {
+    const out: Record<string, unknown> = {};
+    for (const col of columns) {
+      const val = row[col];
+      if (val === null || val === undefined) {
+        out[col] = null;
+      } else if (Buffer.isBuffer(val)) {
+        out[col] = val.toString('hex');
+      } else if (val instanceof Date) {
+        out[col] = val.toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '');
+      } else if (typeof val === 'bigint') {
+        out[col] = val.toString();
+      } else {
+        out[col] = val;
+      }
+    }
+    return out;
+  });
+
+  return { rows: serializedRows, columnMeta };
 }
 
 export class MysqlDriver implements DbDriver {
@@ -91,63 +151,41 @@ export class MysqlDriver implements DbDriver {
       }
 
       const [rows, fields] = await conn.query(sql, params) as [RowDataPacket[] | ResultSetHeader, FieldPacket[]];
-
-      if (!Array.isArray(rows)) {
-        const result = rows as ResultSetHeader;
-        return {
-          rows: [],
-          columnMeta: [],
-          affectedRows: result.affectedRows ?? 0,
-          insertId: result.insertId ?? null,
-        };
+      // With multipleStatements enabled, mysql2 returns arrays-of-arrays when
+      // the SQL contains more than one statement. Internal callers (insertRow,
+      // updateCell, deleteRow, …) only ever pass single statements, so flatten
+      // the multi-result shape down to the first set here for the legacy contract.
+      // Multi-statement user input goes through `queryAll` instead.
+      if (Array.isArray(rows) && rows.length > 0 && Array.isArray((rows as unknown[])[0])) {
+        const firstRows = (rows as unknown as RowDataPacket[][])[0];
+        const firstFields = (fields as unknown as FieldPacket[][])[0] ?? [];
+        return buildMysqlResult(firstRows, firstFields);
       }
+      return buildMysqlResult(rows, fields);
+    } finally {
+      conn.release();
+    }
+  }
 
-      const NOT_NULL_FLAG = 1;
-      const PRI_KEY_FLAG = 2;
-      const UNIQUE_KEY_FLAG = 4;
-
-      const columnMeta: ColumnMeta[] = fields.map(f => {
-        let flagsNum = 0;
-        if (typeof f.flags === 'number') {
-          flagsNum = f.flags;
-        } else if (Array.isArray(f.flags)) {
-          if ((f.flags as string[]).includes('NOT_NULL')) flagsNum |= NOT_NULL_FLAG;
-          if ((f.flags as string[]).includes('PRI_KEY')) flagsNum |= PRI_KEY_FLAG;
-          if ((f.flags as string[]).includes('UNIQUE_KEY')) flagsNum |= UNIQUE_KEY_FLAG;
-        }
-        return {
-          name: f.name,
-          orgName: f.orgName ?? f.name,
-          table: f.table ?? '',
-          orgTable: f.orgTable ?? '',
-          pk: (flagsNum & PRI_KEY_FLAG) === PRI_KEY_FLAG,
-          unique: (flagsNum & UNIQUE_KEY_FLAG) === UNIQUE_KEY_FLAG,
-          notNull: (flagsNum & NOT_NULL_FLAG) === NOT_NULL_FLAG,
-          mysqlType: f.columnType ?? f.type ?? 0,
-        };
-      });
-
-      const columns = fields.map(f => f.name);
-      const serializedRows = (rows as RowDataPacket[]).map(row => {
-        const out: Record<string, unknown> = {};
-        for (const col of columns) {
-          const val = row[col];
-          if (val === null || val === undefined) {
-            out[col] = null;
-          } else if (Buffer.isBuffer(val)) {
-            out[col] = val.toString('hex');
-          } else if (val instanceof Date) {
-            out[col] = val.toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '');
-          } else if (typeof val === 'bigint') {
-            out[col] = val.toString();
-          } else {
-            out[col] = val;
-          }
-        }
-        return out;
-      });
-
-      return { rows: serializedRows, columnMeta };
+  async queryAll(sql: string, schema?: string): Promise<QueryResult[]> {
+    const conn = await this.pool.getConnection();
+    try {
+      if (schema) {
+        await conn.query(`USE \`${schema.replace(/`/g, '')}\``);
+      }
+      const [rawRows, rawFields] = await conn.query(sql) as [
+        RowDataPacket[] | ResultSetHeader | (RowDataPacket[] | ResultSetHeader)[],
+        FieldPacket[] | FieldPacket[][],
+      ];
+      // Single statement: mysql2 returns the result directly. Multi-statement: it
+      // returns parallel arrays — one rowset and one fields array per statement.
+      const isMulti = Array.isArray(rawRows) && rawRows.length > 0 && Array.isArray((rawRows as unknown[])[0]);
+      if (!isMulti) {
+        return [buildMysqlResult(rawRows as RowDataPacket[] | ResultSetHeader, rawFields as FieldPacket[])];
+      }
+      const rowSets = rawRows as (RowDataPacket[] | ResultSetHeader)[];
+      const fieldSets = rawFields as FieldPacket[][];
+      return rowSets.map((r, i) => buildMysqlResult(r, fieldSets[i] ?? []));
     } finally {
       conn.release();
     }
