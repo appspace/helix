@@ -1,6 +1,24 @@
 import pg from 'pg';
 import type { DbDriver, ConnectionConfig, QueryResult, ColumnMeta, ColumnInfo, SchemaInfo, TableInfo } from './interface.js';
 
+// Return DATE / TIME / TIMESTAMP / TIMESTAMPTZ / TIMETZ as raw strings rather
+// than JS Dates. pg's default parsers route through `new Date(...)`, which
+// (a) loses sub-millisecond precision and (b) re-renders the value in whatever
+// timezone the consumer happens to call `toISOString()` from — a row written
+// as "2026-05-07 10:00:00" comes back skewed by hours in any process whose TZ
+// differs from where it was written. Helix is a DB browser; show the literal
+// value the server hands us. setTypeParser mutates pg's global registry, but
+// pg is only used by this driver in this app.
+const PG_DATE = 1082;
+const PG_TIME = 1083;
+const PG_TIMESTAMP = 1114;
+const PG_TIMESTAMPTZ = 1184;
+const PG_TIMETZ = 1266;
+const identity = (v: string) => v;
+for (const oid of [PG_DATE, PG_TIME, PG_TIMESTAMP, PG_TIMESTAMPTZ, PG_TIMETZ]) {
+  pg.types.setTypeParser(oid, identity);
+}
+
 function buildPgPoolConfig(config: ConnectionConfig): pg.PoolConfig {
   return {
     host: config.host,

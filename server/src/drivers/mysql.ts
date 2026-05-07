@@ -16,6 +16,13 @@ function buildMysqlPoolOptions(config: ConnectionConfig): mysql.PoolOptions {
     connectionLimit: 5,
     connectTimeout: 10_000,
     multipleStatements: true,
+    // Return DATE / DATETIME / TIMESTAMP as raw strings rather than JS Dates.
+    // mysql2's default coerces them through `new Date(...)`, which interprets
+    // the value in the Node process's local timezone and then loses TZ on the
+    // way out — a row written as "2026-05-07 10:00:00" comes back several hours
+    // skewed in any process whose TZ differs from where it was written.
+    // Helix is a DB browser; surface the literal value, don't reinterpret.
+    dateStrings: true,
     // OS-level TCP keepalive — without this, dead sockets after macOS sleep
     // are only surfaced by the kernel's default ~2-hour timer, which causes
     // the first post-resume query to hang. See #145.

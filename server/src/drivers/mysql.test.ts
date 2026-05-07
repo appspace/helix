@@ -140,6 +140,14 @@ describe('MysqlDriver.recyclePool', () => {
     expect(opts.enableKeepAlive).toBe(true);
     expect(opts.keepAliveInitialDelay).toBe(10_000);
   });
+
+  it('enables dateStrings so DATE/DATETIME/TIMESTAMP avoid the local-TZ JS Date roundtrip', async () => {
+    const cp = await getCreatePoolMock();
+    cp.mockClear();
+    makeDriver();
+    const opts = cp.mock.calls[0][0];
+    expect(opts.dateStrings).toBe(true);
+  });
 });
 
 describe('MysqlDriver.queryAll – multi-statement results', () => {
