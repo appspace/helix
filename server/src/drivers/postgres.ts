@@ -20,6 +20,45 @@ function buildPgPoolConfig(config: ConnectionConfig): pg.PoolConfig {
   };
 }
 
+function buildPgResult(result: pg.QueryResult): QueryResult {
+  if (!result.fields || result.fields.length === 0) {
+    return {
+      rows: [],
+      columnMeta: [],
+      affectedRows: result.rowCount ?? 0,
+      insertId: null,
+    };
+  }
+  const columnMeta: ColumnMeta[] = result.fields.map(f => ({
+    name: f.name,
+    orgName: f.name,
+    table: '',
+    orgTable: '',
+    pk: false,
+    unique: false,
+    notNull: false,
+    mysqlType: 0,
+  }));
+  const columns = result.fields.map(f => f.name);
+  const serializedRows = (result.rows as Record<string, unknown>[]).map(row => {
+    const out: Record<string, unknown> = {};
+    for (const col of columns) {
+      const val = row[col];
+      if (val === null || val === undefined) {
+        out[col] = null;
+      } else if (Buffer.isBuffer(val)) {
+        out[col] = val.toString('hex');
+      } else if (val instanceof Date) {
+        out[col] = val.toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '');
+      } else {
+        out[col] = val;
+      }
+    }
+    return out;
+  });
+  return { rows: serializedRows, columnMeta };
+}
+
 export class PostgresDriver implements DbDriver {
   readonly queryMode = 'sql' as const;
   private pool: pg.Pool;
@@ -85,50 +124,36 @@ export class PostgresDriver implements DbDriver {
         pgSql = sql.replace(/\?/g, () => `$${++n}`);
       }
       const result = await client.query({ text: pgSql, values: params?.length ? params : undefined });
-
-      // Non-SELECT (INSERT, UPDATE, DELETE, DDL, etc.)
-      if (!result.fields || result.fields.length === 0) {
-        return {
-          rows: [],
-          columnMeta: [],
-          affectedRows: result.rowCount ?? 0,
-          insertId: null,
-        };
-      }
-
-      const columnMeta: ColumnMeta[] = result.fields.map(f => ({
-        name: f.name,
-        orgName: f.name,
-        table: '',
-        orgTable: '',
-        pk: false,
-        unique: false,
-        notNull: false,
-        mysqlType: 0,
-      }));
-
-      const columns = result.fields.map(f => f.name);
-      const serializedRows = (result.rows as Record<string, unknown>[]).map(row => {
-        const out: Record<string, unknown> = {};
-        for (const col of columns) {
-          const val = row[col];
-          if (val === null || val === undefined) {
-            out[col] = null;
-          } else if (Buffer.isBuffer(val)) {
-            out[col] = val.toString('hex');
-          } else if (val instanceof Date) {
-            out[col] = val.toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '');
-          } else {
-            out[col] = val;
-          }
-        }
-        return out;
-      });
-
-      return { rows: serializedRows, columnMeta };
+      // node-pg's simple query protocol returns an array of results when the SQL
+      // contains multiple statements. `query()` keeps the legacy single-result
+      // contract — `queryAll` is the multi-statement entry point — so collapse
+      // an unexpected array down to its last element.
+      const single = Array.isArray(result) ? (result as pg.QueryResult[])[result.length - 1] : result;
+      return buildPgResult(single);
     } finally {
       // pg.Pool reuses clients without resetting session state, so search_path
       // would leak to the next caller on this same client.
+      if (searchPathSet) {
+        try { await client.query('SET search_path TO DEFAULT'); } catch { /* fall through to release */ }
+      }
+      client.release();
+    }
+  }
+
+  async queryAll(sql: string, schema?: string): Promise<QueryResult[]> {
+    const client = await this.pool.connect();
+    let searchPathSet = false;
+    try {
+      if (schema) {
+        await client.query(`SET search_path TO ${this.escapeIdent(schema)}`);
+        searchPathSet = true;
+      }
+      // Always go through the simple query protocol (no values) so multi-statement
+      // SQL fans out to one result per statement.
+      const raw = await client.query(sql);
+      const results = Array.isArray(raw) ? (raw as pg.QueryResult[]) : [raw];
+      return results.map(buildPgResult);
+    } finally {
       if (searchPathSet) {
         try { await client.query('SET search_path TO DEFAULT'); } catch { /* fall through to release */ }
       }

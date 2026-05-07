@@ -141,3 +141,43 @@ describe('MysqlDriver.recyclePool', () => {
     expect(opts.keepAliveInitialDelay).toBe(10_000);
   });
 });
+
+describe('MysqlDriver.queryAll – multi-statement results', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockPool.getConnection.mockResolvedValue(mockConn);
+  });
+
+  it('returns one result per statement when mysql2 returns parallel arrays', async () => {
+    // mysql2's shape for multi-statement responses: arrays-of-arrays for both rows and fields.
+    mockConn.query.mockResolvedValueOnce([
+      [
+        [{ a: 1 }],
+        [{ b: 2 }],
+      ],
+      [
+        [{ name: 'a' }],
+        [{ name: 'b' }],
+      ],
+    ]);
+    const results = await makeDriver().queryAll('SELECT 1 AS a; SELECT 2 AS b');
+    expect(results).toHaveLength(2);
+    expect(results[0].rows).toEqual([{ a: 1 }]);
+    expect(results[1].rows).toEqual([{ b: 2 }]);
+    expect(mockConn.release).toHaveBeenCalledTimes(1);
+  });
+
+  it('wraps a single-statement response in a one-element array', async () => {
+    mockConn.query.mockResolvedValueOnce([[{ id: 1 }], [{ name: 'id' }]]);
+    const results = await makeDriver().queryAll('SELECT 1 AS id');
+    expect(results).toHaveLength(1);
+    expect(results[0].rows).toEqual([{ id: 1 }]);
+    expect(mockConn.release).toHaveBeenCalledTimes(1);
+  });
+
+  it('releases the connection when queryAll rejects', async () => {
+    mockConn.query.mockRejectedValueOnce(new Error('multi boom'));
+    await expect(makeDriver().queryAll('SELECT 1; SELECT 2')).rejects.toThrow('multi boom');
+    expect(mockConn.release).toHaveBeenCalledTimes(1);
+  });
+});

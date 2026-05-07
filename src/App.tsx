@@ -26,6 +26,11 @@ interface Tab {
   // same table name in two different schemas gets its own tab.
   sourceTable?: { schema: string; table: string };
   results?: QueryResults | null;
+  // Every result set returned by the most recent run, in statement order.
+  // `results` mirrors the currently-selected entry so existing CRUD callbacks
+  // operate on the same rowset the user is looking at.
+  resultSets?: QueryResults[];
+  activeResultIndex?: number;
   queryError?: string | null;
   execTime?: number | null;
   isRunning?: boolean;
@@ -253,21 +258,30 @@ export default function App() {
       }
     }
 
-    updateTab(targetTab, { isRunning: true, results: null, queryError: null, execTime: null });
+    updateTab(targetTab, { isRunning: true, results: null, resultSets: undefined, activeResultIndex: 0, queryError: null, execTime: null });
 
     const started = Date.now();
     try {
       const res = queryMode === 'mql'
         ? await api.queryMql(mqlPayload, activeSchema)
         : await api.query(text, activeSchema);
+      // The route always emits the legacy fields from the first statement; `results`
+      // is the new array (one entry per statement). Old responses without it are
+      // synthesised into a single-element array so the rest of the app stays uniform.
+      const sets: QueryResults[] = res.results
+        ? res.results.map(r => ({ columns: r.columns, columnMeta: r.columnMeta, rows: r.rows as QueryResults['rows'] }))
+        : [{ columns: res.columns, columnMeta: res.columnMeta, rows: res.rows }];
       updateTab(targetTab, {
-        results: { columns: res.columns, columnMeta: res.columnMeta, rows: res.rows },
+        results: sets[0],
+        resultSets: sets,
+        activeResultIndex: 0,
         execTime: res.executionTime,
       });
       if (connectionHost) {
+        const totalRows = sets.reduce((n, s) => n + s.rows.length, 0);
         const entry = addHistoryEntry(connectionHost, {
           sql: text, schema: activeSchema, executedAt: started,
-          durationMs: res.executionTime, status: 'ok', rowCount: res.rows.length,
+          durationMs: res.executionTime, status: 'ok', rowCount: totalRows,
         });
         if (entry) setHistory(prev => [entry, ...prev].slice(0, 100));
       }
@@ -466,6 +480,13 @@ export default function App() {
           </div>
           <ResultsTable
             results={results}
+            resultSets={currentTab?.resultSets}
+            activeResultIndex={currentTab?.activeResultIndex ?? 0}
+            onSelectResultIndex={(i: number) => {
+              const sets = currentTab?.resultSets;
+              if (!sets || !sets[i]) return;
+              updateTab(activeTab, { activeResultIndex: i, results: sets[i] });
+            }}
             isRunning={isRunning}
             error={queryError}
             executionTime={execTime}

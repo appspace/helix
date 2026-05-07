@@ -43,24 +43,32 @@ export const postQuery: RequestHandler = async (req, res) => {
 
   try {
     const start = Date.now();
-    const result = await driver.query(queryText, [], schema);
+    // sql-mode drivers expose `queryAll` for multi-statement support; mql-mode
+    // payloads are always a single request and use `query`.
+    const resultList = driver.queryMode === 'sql' && driver.queryAll
+      ? await driver.queryAll(queryText, schema)
+      : [await driver.query(queryText, [], schema)];
     const executionTime = Date.now() - start;
 
-    if (result.columnMeta.length === 0) {
-      res.json({
-        columns: [],
-        rows: [],
-        affectedRows: result.affectedRows ?? 0,
-        insertId: result.insertId ?? null,
-        executionTime,
-      });
-      return;
-    }
+    const results = resultList.map(r => ({
+      columns: r.columnMeta.map(c => c.name),
+      columnMeta: r.columnMeta,
+      rows: r.rows,
+      affectedRows: r.affectedRows ?? 0,
+      insertId: r.insertId ?? null,
+    }));
 
+    // Backwards-compatible single-result envelope: every existing client field is
+    // still set from the first result, plus a new `results` array carrying every
+    // statement's rows when more than one was sent.
+    const first = results[0] ?? { columns: [], columnMeta: [], rows: [], affectedRows: 0, insertId: null };
     res.json({
-      columns: result.columnMeta.map(c => c.name),
-      columnMeta: result.columnMeta,
-      rows: result.rows,
+      columns: first.columns,
+      columnMeta: first.columnMeta,
+      rows: first.rows,
+      affectedRows: first.affectedRows,
+      insertId: first.insertId,
+      results,
       executionTime,
     });
   } catch (err) {

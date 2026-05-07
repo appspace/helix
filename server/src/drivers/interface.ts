@@ -75,6 +75,11 @@ export interface DbDriver {
   readonly queryMode: 'sql' | 'mql';
   /** Run a query, optionally switching schema first (atomically on one connection). */
   query(sql: string, params?: unknown[], schema?: string): Promise<QueryResult>;
+  /**
+   * Run one or more semicolon-separated statements and return a result per statement.
+   * Implemented by sql-mode drivers; mql-mode drivers can omit it.
+   */
+  queryAll?(sql: string, schema?: string): Promise<QueryResult[]>;
   getSchemas(): Promise<string[]>;
   getSchema(schema: string): Promise<SchemaInfo>;
   /** Targeted lookup for a single table — returns null if it doesn't exist. */
