@@ -27,6 +27,7 @@ function buildMysqlPoolOptions(config: ConnectionConfig): mysql.PoolOptions {
 const MYSQL_NOT_NULL_FLAG = 1;
 const MYSQL_PRI_KEY_FLAG = 2;
 const MYSQL_UNIQUE_KEY_FLAG = 4;
+const MYSQL_TYPE_BIT = 16;
 
 function buildMysqlResult(rows: RowDataPacket[] | ResultSetHeader, fields: FieldPacket[]): QueryResult {
   if (!Array.isArray(rows)) {
@@ -37,6 +38,11 @@ function buildMysqlResult(rows: RowDataPacket[] | ResultSetHeader, fields: Field
       affectedRows: result.affectedRows ?? 0,
       insertId: result.insertId ?? null,
     };
+  }
+
+  const bitColumns = new Set<string>();
+  for (const f of fields) {
+    if ((f.columnType ?? f.type) === MYSQL_TYPE_BIT) bitColumns.add(f.name);
   }
 
   const columnMeta: ColumnMeta[] = fields.map(f => {
@@ -68,7 +74,13 @@ function buildMysqlResult(rows: RowDataPacket[] | ResultSetHeader, fields: Field
       if (val === null || val === undefined) {
         out[col] = null;
       } else if (Buffer.isBuffer(val)) {
-        out[col] = val.toString('hex');
+        if (bitColumns.has(col) && val.length <= 6) {
+          let n = 0;
+          for (const byte of val) n = n * 256 + byte;
+          out[col] = n;
+        } else {
+          out[col] = val.toString('hex');
+        }
       } else if (val instanceof Date) {
         out[col] = val.toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '');
       } else if (typeof val === 'bigint') {
