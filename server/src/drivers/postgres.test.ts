@@ -12,11 +12,20 @@ class MockPool {
 }
 const mockPoolInstance = new MockPool();
 
+const { setTypeParser } = vi.hoisted(() => ({ setTypeParser: vi.fn() }));
+
 vi.mock('pg', () => ({
-  default: { Pool: vi.fn(() => mockPoolInstance) },
+  default: {
+    Pool: vi.fn(() => mockPoolInstance),
+    types: { setTypeParser },
+  },
 }));
 
 import { PostgresDriver } from './postgres.js';
+
+// Snapshot module-load `setTypeParser` calls before any `vi.clearAllMocks()`
+// in later `beforeEach` blocks wipes them.
+const initialTypeParserCalls = setTypeParser.mock.calls.map(c => [c[0], c[1]] as const);
 
 function makeDriver() {
   return new PostgresDriver({
@@ -150,5 +159,18 @@ describe('PostgresDriver.recyclePool', () => {
     const cfg = Pool.mock.calls[0][0];
     expect(cfg.keepAlive).toBe(true);
     expect(cfg.keepAliveInitialDelayMillis).toBe(10_000);
+  });
+});
+
+describe('PostgresDriver – date/time type parsers', () => {
+  it('overrides DATE/TIME/TIMESTAMP/TIMESTAMPTZ/TIMETZ parsers to return raw strings', () => {
+    const oids = initialTypeParserCalls.map(([oid]) => oid);
+    // 1082=DATE, 1083=TIME, 1114=TIMESTAMP, 1184=TIMESTAMPTZ, 1266=TIMETZ
+    expect(oids).toEqual(expect.arrayContaining([1082, 1083, 1114, 1184, 1266]));
+
+    // Each parser should be the identity for the wire string — no Date conversion.
+    for (const [, parser] of initialTypeParserCalls) {
+      expect((parser as (v: string) => string)('2026-05-07 10:00:00')).toBe('2026-05-07 10:00:00');
+    }
   });
 });
