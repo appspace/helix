@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatSqlValue, buildInsertSql, parseEnumValues } from './sql';
+import { formatSqlValue, buildInsertSql, parseEnumValues, buildDefaultTableQuery } from './sql';
 
 describe('parseEnumValues', () => {
   it('parses a standard enum type', () => {
@@ -90,5 +90,23 @@ describe('buildInsertSql', () => {
   it('backtick-escapes table name', () => {
     const sql = buildInsertSql('my table', { col: 1 });
     expect(sql).toContain('`my table`');
+  });
+});
+
+describe('buildDefaultTableQuery', () => {
+  it('returns the unsorted template when there is no auto-inc PK', () => {
+    expect(buildDefaultTableQuery('users', null)).toBe('SELECT *\nFROM `users`\nLIMIT 100;');
+  });
+
+  it('appends ORDER BY <pk> DESC when an auto-inc PK is provided', () => {
+    expect(buildDefaultTableQuery('orders', 'id')).toBe(
+      'SELECT *\nFROM `orders`\nORDER BY `id` DESC\nLIMIT 100;',
+    );
+  });
+
+  it('backtick-escapes both the table name and the PK column', () => {
+    const sql = buildDefaultTableQuery('my table', 'order id');
+    expect(sql).toContain('`my table`');
+    expect(sql).toContain('`order id`');
   });
 });
