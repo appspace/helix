@@ -14,6 +14,7 @@ import { electronAPI } from './electronAPI';
 import { addHistoryEntry, listHistory, deleteHistoryEntry, clearHistory, type HistoryEntry } from './queryHistory';
 import { listSavedQueries, saveQuery, deleteSavedQuery, renameSavedQuery, type SavedQuery } from './savedQueries';
 import { buildDefaultTableQuery } from './lib/sql';
+import { loadTabs, saveTabs } from './tabPersistence';
 
 interface Tab {
   id: string;
@@ -128,6 +129,24 @@ export default function App() {
       setSavedQueries(listSavedQueries(res.connectionName));
       setSchemas(list);
       setActiveSchema(initial);
+
+      // Restore the user's previous tabs for this connection. We deliberately
+      // don't persist result data (privacy + size); the user re-runs to get
+      // fresh rows. Seed tabCounter from the highest restored id so new tabs
+      // can't collide with restored ones.
+      const persistedTabs = loadTabs(res.connectionName);
+      if (persistedTabs) {
+        setTabs(persistedTabs.tabs);
+        const restoredActive = persistedTabs.tabs.find(t => t.id === persistedTabs.activeTabId)
+          ? persistedTabs.activeTabId
+          : persistedTabs.tabs[0].id;
+        setActiveTab(restoredActive);
+        tabCounter.current = persistedTabs.tabs.reduce(
+          (max, t) => Math.max(max, parseInt(t.id, 10) || 0),
+          0,
+        );
+      }
+
       setConnected(true);
       setShowConnectionModal(false);
 
@@ -402,6 +421,17 @@ export default function App() {
   useEffect(() => {
     if (connected && activeSchema) loadSchema(activeSchema);
   }, [activeSchema, connected, loadSchema]);
+
+  // Persist the editor tabs (name + query + sourceTable only) per connection.
+  // Skips when not connected so disconnect's reset-to-default doesn't wipe the
+  // saved set — reconnecting the same database picks them back up.
+  useEffect(() => {
+    if (!connected || !connectionHost) return;
+    saveTabs(connectionHost, {
+      tabs: tabs.map(({ id, name, query, sourceTable }) => ({ id, name, query, sourceTable })),
+      activeTabId: activeTab,
+    });
+  }, [connected, connectionHost, tabs, activeTab]);
 
   // Sync MCP status on mount and whenever connection state changes (covers page refresh).
   useEffect(() => {
