@@ -13,6 +13,7 @@ interface SchemaBrowserProps {
   schemas: string[];
   activeSchema: string;
   onDropTable?: (schema: string, table: string) => Promise<void>;
+  onCreateTable?: () => void;
   t: Theme;
 }
 
@@ -82,7 +83,7 @@ function readStoredWidth(): number {
   }
 }
 
-export function SchemaBrowser({ schema, activeTable, onTableSelect, onSchemaChange, schemas, activeSchema, onDropTable, t }: SchemaBrowserProps) {
+export function SchemaBrowser({ schema, activeTable, onTableSelect, onSchemaChange, schemas, activeSchema, onDropTable, onCreateTable, t }: SchemaBrowserProps) {
   const [expanded, setExpanded] = useState({ tables: true, views: false, procedures: false, triggers: false });
   const [expandedTables, setExpandedTables] = useState<Record<string, boolean>>({});
   const [filter, setFilter] = useState('');
@@ -222,6 +223,16 @@ export function SchemaBrowser({ schema, activeTable, onTableSelect, onSchemaChan
               <Chevron open={expanded[g.key]} color={t.textMuted}/>
               <span style={s.groupLabel}>{g.label}</span>
               <span style={s.groupCount}>{g.count}</span>
+              {g.key === 'tables' && onCreateTable && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); onCreateTable(); }}
+                  title="New table"
+                  aria-label="New table"
+                  style={{ marginLeft: 'auto', background: 'transparent', border: 'none', color: t.textMuted, cursor: 'pointer', fontSize: 14, padding: '0 4px', lineHeight: 1 }}
+                  onMouseEnter={(e) => { e.currentTarget.style.color = t.textPrimary; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.color = t.textMuted; }}
+                >+</button>
+              )}
             </div>
 
             {expanded[g.key] && g.key === 'tables' && filteredTables.map(table => (

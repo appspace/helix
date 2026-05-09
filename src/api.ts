@@ -91,6 +91,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export type QueryMode = 'sql' | 'mql';
+export type DbType = 'mysql' | 'postgres' | 'mongodb';
 
 export interface QueryResultPayload {
   columns: string[];
@@ -110,7 +111,7 @@ export type QueryResponse = QueryResults & {
 
 export const api = {
   connect(form: ConnectFormInput) {
-    return request<{ ok: boolean; connectionName: string; queryMode: QueryMode }>('/api/connect', {
+    return request<{ ok: boolean; connectionName: string; queryMode: QueryMode; dbType: DbType }>('/api/connect', {
       method: 'POST',
       body: JSON.stringify(buildConnectBody(form)),
     });
@@ -128,7 +129,7 @@ export const api = {
   },
 
   status() {
-    return request<{ connected: boolean; connectionName: string | null; queryMode: QueryMode | null }>('/api/connect/status');
+    return request<{ connected: boolean; connectionName: string | null; queryMode: QueryMode | null; dbType: DbType | null }>('/api/connect/status');
   },
 
   schemas() {
@@ -183,6 +184,13 @@ export const api = {
     return request<{ ok: boolean; sql: string }>('/api/drop-table', {
       method: 'POST',
       body: JSON.stringify({ schema, table }),
+    });
+  },
+
+  createTable(sql: string) {
+    return request<{ ok: boolean; sql: string }>('/api/create-table', {
+      method: 'POST',
+      body: JSON.stringify({ sql }),
     });
   },
 

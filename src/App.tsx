@@ -15,6 +15,8 @@ import { addHistoryEntry, listHistory, deleteHistoryEntry, clearHistory, type Hi
 import { listSavedQueries, saveQuery, deleteSavedQuery, renameSavedQuery, type SavedQuery } from './savedQueries';
 import { buildDefaultTableQuery } from './lib/sql';
 import { loadTabs, saveTabs } from './tabPersistence';
+import { CreateTableDialog } from './components/CreateTableDialog';
+import type { DbType } from './api';
 
 interface Tab {
   id: string;
@@ -62,6 +64,8 @@ export default function App() {
 
   const [connected, setConnected] = useState(false);
   const [queryMode, setQueryMode] = useState<QueryMode>('sql');
+  const [dbType, setDbType] = useState<DbType | null>(null);
+  const [showCreateTable, setShowCreateTable] = useState(false);
   const [showConnectionModal, setShowConnectionModal] = useState(true);
   const [isConnecting, setIsConnecting] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
@@ -125,6 +129,7 @@ export default function App() {
       setConnectionName(friendly || res.connectionName);
       setConnectionHost(res.connectionName);
       setQueryMode(res.queryMode);
+      setDbType(res.dbType);
       setHistory(listHistory(res.connectionName));
       setSavedQueries(listSavedQueries(res.connectionName));
       setSchemas(list);
@@ -186,6 +191,7 @@ export default function App() {
     try { await api.disconnect(); } catch { /* ignore */ }
     setConnected(false);
     setQueryMode('sql');
+    setDbType(null);
     setShowConnectionModal(true);
     setConnectionName('Not connected');
     setConnectionHost(null);
@@ -206,6 +212,17 @@ export default function App() {
     if (activeTable === table) setActiveTable(null);
     updateTab(activeTab, { results: null, queryError: null });
     await loadSchema(schema);
+  };
+
+  const handleCreateTable = async (sql: string) => {
+    await api.createTable(sql);
+    setShowCreateTable(false);
+    // Refresh whichever schema the user is currently looking at; if the new
+    // table targets a different schema (parsed out of the DDL would be brittle —
+    // the user can re-select from the dropdown), the active-schema view is at
+    // least consistent.
+    if (activeSchema) await loadSchema(activeSchema);
+    return { schema: activeSchema, table: '' };
   };
 
   const handleInsertRow = async (
@@ -490,6 +507,7 @@ export default function App() {
           schemas={schemas}
           activeSchema={activeSchema}
           onDropTable={handleDropTable}
+          onCreateTable={queryMode === 'sql' ? () => setShowCreateTable(true) : undefined}
           t={t}
         />
 
@@ -543,6 +561,16 @@ export default function App() {
           onConnect={handleConnect}
           isConnecting={isConnecting}
           error={connectionError}
+          t={t}
+        />
+      )}
+
+      {showCreateTable && dbType && dbType !== 'mongodb' && (
+        <CreateTableDialog
+          dbType={dbType}
+          initialSchema={activeSchema}
+          onSubmit={handleCreateTable}
+          onClose={() => setShowCreateTable(false)}
           t={t}
         />
       )}
