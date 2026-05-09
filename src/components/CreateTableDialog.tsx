@@ -93,8 +93,10 @@ export function CreateTableDialog({ dbType, initialSchema, onSubmit, onClose, t 
   };
 
   const submit = async () => {
-    const v = validate();
-    if (v) { setError(v); return; }
+    if (sqlOverride === null) {
+      const v = validate();
+      if (v) { setError(v); return; }
+    }
     setSaving(true);
     setError(null);
     try {
@@ -173,7 +175,6 @@ export function CreateTableDialog({ dbType, initialSchema, onSubmit, onClose, t 
               <ColumnRow
                 key={i}
                 col={c}
-                typeOptions={typeOptions}
                 style={s}
                 onChange={patch => updateCol(i, patch)}
                 onSetPk={() => setPkOn(i)}
@@ -181,6 +182,9 @@ export function CreateTableDialog({ dbType, initialSchema, onSubmit, onClose, t 
               />
             ))}
           </div>
+          <datalist id="helix-create-table-types">
+            {typeOptions.map(t => <option key={t} value={t} />)}
+          </datalist>
 
           <div style={s.sectionHeader}>
             <span style={s.sectionTitle}>SQL preview</span>
@@ -219,14 +223,13 @@ export function CreateTableDialog({ dbType, initialSchema, onSubmit, onClose, t 
 
 interface ColumnRowProps {
   col: CreateTableColumn;
-  typeOptions: string[];
   style: Record<string, CSSProperties>;
   onChange: (patch: Partial<CreateTableColumn>) => void;
   onSetPk: () => void;
   onRemove: () => void;
 }
 
-function ColumnRow({ col, typeOptions, style, onChange, onSetPk, onRemove }: ColumnRowProps) {
+function ColumnRow({ col, style, onChange, onSetPk, onRemove }: ColumnRowProps) {
   // The type field is a free-form input with a datalist of common types — lets
   // users pick fast and still write VARCHAR(50), DECIMAL(8,2), etc. by hand.
   return (
@@ -259,7 +262,11 @@ function ColumnRow({ col, typeOptions, style, onChange, onSetPk, onRemove }: Col
       <input
         type="checkbox"
         checked={col.autoIncrement}
-        onChange={(e) => onChange({ autoIncrement: e.target.checked })}
+        onChange={(e) => {
+          const checked = e.target.checked;
+          onChange({ autoIncrement: checked });
+          if (checked) onSetPk();
+        }}
         style={{ justifySelf: 'center' }}
       />
       <input
@@ -269,9 +276,6 @@ function ColumnRow({ col, typeOptions, style, onChange, onSetPk, onRemove }: Col
         style={{ justifySelf: 'center' }}
       />
       <button onClick={onRemove} style={style.iconBtn} title="Remove column" aria-label="Remove column">×</button>
-      <datalist id="helix-create-table-types">
-        {typeOptions.map(t => <option key={t} value={t} />)}
-      </datalist>
     </>
   );
 }
