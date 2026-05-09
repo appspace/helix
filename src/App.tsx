@@ -13,6 +13,7 @@ import { saveConnection } from './savedConnections';
 import { electronAPI } from './electronAPI';
 import { addHistoryEntry, listHistory, deleteHistoryEntry, clearHistory, type HistoryEntry } from './queryHistory';
 import { listSavedQueries, saveQuery, deleteSavedQuery, renameSavedQuery, type SavedQuery } from './savedQueries';
+import { buildDefaultTableQuery } from './lib/sql';
 
 interface Tab {
   id: string;
@@ -369,7 +370,14 @@ export default function App() {
       const body = JSON.stringify({ collection: name, operation: 'find', filter: {}, limit: 100 }, null, 2);
       addTab(`${name}.json`, body, source);
     } else {
-      addTab(`${name}.sql`, `SELECT *\nFROM \`${name}\`\nLIMIT 100;`, source);
+      // Sort by the PK descending only when it's a single auto-incrementing
+      // column, so the user lands on the most-recent rows for the common case.
+      // UUID/string/composite PKs get the unsorted template — descending order
+      // would be meaningless or surprising there.
+      const tableInfo = schemaData.tables.find(t => t.name === name);
+      const pkCols = tableInfo?.columns.filter(c => c.pk) ?? [];
+      const autoIncPk = pkCols.length === 1 && pkCols[0].autoIncrement ? pkCols[0].name : null;
+      addTab(`${name}.sql`, buildDefaultTableQuery(name, autoIncPk), source);
     }
   };
 

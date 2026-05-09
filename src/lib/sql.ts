@@ -18,6 +18,17 @@ export function formatSqlValue(v: CellValue): string {
   return String(v);
 }
 
+/**
+ * Default query template used when the user clicks a table in the sidebar.
+ * Sorts by `pkColumn DESC` when provided so the most recent rows appear first
+ * — caller passes null for tables without a single auto-incrementing PK,
+ * since descending order is meaningless on UUID/string/composite keys.
+ */
+export function buildDefaultTableQuery(table: string, pkColumn: string | null): string {
+  const orderBy = pkColumn ? `\nORDER BY \`${pkColumn}\` DESC` : '';
+  return `SELECT *\nFROM \`${table}\`${orderBy}\nLIMIT 100;`;
+}
+
 export function buildInsertSql(table: string, values: Record<string, CellValue>): string {
   const cols = Object.keys(values);
   if (cols.length === 0) return `INSERT INTO \`${table}\` () VALUES ();`;
