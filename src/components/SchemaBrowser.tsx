@@ -14,6 +14,7 @@ interface SchemaBrowserProps {
   activeSchema: string;
   onDropTable?: (schema: string, table: string) => Promise<void>;
   onCreateTable?: () => void;
+  onAlterTable?: (schema: string, table: string) => void;
   t: Theme;
 }
 
@@ -83,7 +84,7 @@ function readStoredWidth(): number {
   }
 }
 
-export function SchemaBrowser({ schema, activeTable, onTableSelect, onSchemaChange, schemas, activeSchema, onDropTable, onCreateTable, t }: SchemaBrowserProps) {
+export function SchemaBrowser({ schema, activeTable, onTableSelect, onSchemaChange, schemas, activeSchema, onDropTable, onCreateTable, onAlterTable, t }: SchemaBrowserProps) {
   const [expanded, setExpanded] = useState({ tables: true, views: false, procedures: false, triggers: false });
   const [expandedTables, setExpandedTables] = useState<Record<string, boolean>>({});
   const [filter, setFilter] = useState('');
@@ -307,6 +308,14 @@ export function SchemaBrowser({ schema, activeTable, onTableSelect, onSchemaChan
           />
           {contextMenu.type === 'table' && (<>
             <div style={{ height: 1, background: t.borderSubtle, margin: '3px 0' }}/>
+            {onAlterTable && (
+              <CtxItem
+                t={t}
+                onClick={() => { onAlterTable(activeSchema, contextMenu.name); setContextMenu(null); }}
+                icon={<><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></>}
+                label="Edit table"
+              />
+            )}
             <CtxItem
               t={t}
               onClick={() => { setConfirmDrop({ table: contextMenu.name, typedName: '', error: null, working: false }); setContextMenu(null); }}

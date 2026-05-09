@@ -10,6 +10,7 @@ import { postInsertRow } from './routes/insertRow.js';
 import { getTableDdl } from './routes/tableDdl.js';
 import { postDropTable } from './routes/dropTable.js';
 import { postCreateTable } from './routes/createTable.js';
+import { postAlterTable } from './routes/alterTable.js';
 import { getMcpStatus, postMcpWrites } from './routes/mcpSettings.js';
 import { mcpHandler } from './mcp.js';
 import { recycleActivePool } from './db.js';
@@ -39,6 +40,7 @@ app.post('/api/update-cell', postUpdateCell);
 app.post('/api/insert-row', postInsertRow);
 app.post('/api/drop-table', postDropTable);
 app.post('/api/create-table', postCreateTable);
+app.post('/api/alter-table', postAlterTable);
 
 // MCP
 app.get('/api/mcp/status', getMcpStatus);

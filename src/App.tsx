@@ -16,7 +16,8 @@ import { listSavedQueries, saveQuery, deleteSavedQuery, renameSavedQuery, type S
 import { buildDefaultTableQuery } from './lib/sql';
 import { loadTabs, saveTabs } from './tabPersistence';
 import { CreateTableDialog } from './components/CreateTableDialog';
-import type { DbType } from './api';
+import { AlterTableDialog } from './components/AlterTableDialog';
+import type { DbType, SchemaColumn } from './api';
 
 interface Tab {
   id: string;
@@ -66,6 +67,7 @@ export default function App() {
   const [queryMode, setQueryMode] = useState<QueryMode>('sql');
   const [dbType, setDbType] = useState<DbType | null>(null);
   const [showCreateTable, setShowCreateTable] = useState(false);
+  const [alteringTable, setAlteringTable] = useState<{ schema: string; table: string; columns: SchemaColumn[] } | null>(null);
   const [showConnectionModal, setShowConnectionModal] = useState(true);
   const [isConnecting, setIsConnecting] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
@@ -223,6 +225,18 @@ export default function App() {
     // least consistent.
     if (activeSchema) await loadSchema(activeSchema);
     return { schema: activeSchema, table: '' };
+  };
+
+  const handleOpenAlterTable = (schema: string, table: string) => {
+    const tableInfo = schemaData.tables.find(t => t.name === table);
+    if (!tableInfo) return;
+    setAlteringTable({ schema, table, columns: tableInfo.columns });
+  };
+
+  const handleAlterTable = async (sql: string) => {
+    await api.alterTable(sql);
+    setAlteringTable(null);
+    if (activeSchema) await loadSchema(activeSchema);
   };
 
   const handleInsertRow = async (
@@ -508,6 +522,7 @@ export default function App() {
           activeSchema={activeSchema}
           onDropTable={handleDropTable}
           onCreateTable={queryMode === 'sql' ? () => setShowCreateTable(true) : undefined}
+          onAlterTable={queryMode === 'sql' ? handleOpenAlterTable : undefined}
           t={t}
         />
 
@@ -571,6 +586,18 @@ export default function App() {
           initialSchema={activeSchema}
           onSubmit={handleCreateTable}
           onClose={() => setShowCreateTable(false)}
+          t={t}
+        />
+      )}
+
+      {alteringTable && dbType && dbType !== 'mongodb' && (
+        <AlterTableDialog
+          dbType={dbType}
+          schema={alteringTable.schema}
+          table={alteringTable.table}
+          columns={alteringTable.columns}
+          onSubmit={handleAlterTable}
+          onClose={() => setAlteringTable(null)}
           t={t}
         />
       )}
