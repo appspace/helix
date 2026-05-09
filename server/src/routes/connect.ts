@@ -153,6 +153,7 @@ export const postConnect: RequestHandler = async (req, res) => {
       ok: true,
       connectionName: connectionLabel(config),
       queryMode: getDriver().queryMode,
+      dbType: config.type,
     });
   } catch (err) {
     res.status(400).json({ error: friendlyConnectError(err, config.host, config.port, config.type) });
@@ -187,5 +188,6 @@ export const getStatus: RequestHandler = (_req, res) => {
     connected,
     connectionName: config ? connectionLabel(config) : null,
     queryMode: connected ? getDriver().queryMode : null,
+    dbType: config?.type ?? null,
   });
 };
