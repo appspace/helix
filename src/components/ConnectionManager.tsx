@@ -497,7 +497,10 @@ function ConnectionNameField({ value, onChange, saved, appliedSaved, onSelect, o
     else if (e.key === 'Enter' && highlight >= 0 && filtered[highlight]) {
       e.preventDefault(); choose(filtered[highlight]);
     }
-    else if (e.key === 'Escape') {
+    else if (e.key === 'Escape' && open) {
+      // Only intercept Escape when there's actually a dropdown to close —
+      // otherwise we'd swallow the key and break any parent-level handler
+      // (e.g. modal-dismiss-on-Escape) that's added later.
       e.preventDefault();
       e.nativeEvent.stopImmediatePropagation();
       setOpen(false);
