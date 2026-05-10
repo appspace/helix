@@ -157,10 +157,12 @@ export function ConnectionManager({ onConnect, isConnecting, error, t }: Connect
   const setField = <K extends keyof ConnectionForm>(k: K, v: ConnectionForm[K]) => {
     setForm(p => {
       const next = { ...p, [k]: v };
-      // Re-derive the URI when any of the URI-relevant fields change. Type
-      // pulls from the prediction (driven by port) so the scheme stays in sync.
+      // Re-derive the URI when any of the URI-relevant fields change. Predict
+      // from the new port only — the existing URI is stale and about to be
+      // overwritten, so deferring to its scheme would lock in the old type
+      // (e.g. postgresql:// staying put after the user types port 27017).
       if (k === 'host' || k === 'port' || k === 'user' || k === 'password' || k === 'database') {
-        const predictedType = predictDbType(next) ?? next.type;
+        const predictedType = predictDbType({ port: next.port }) ?? next.type;
         next.connectionString = buildUri({ ...next, type: predictedType });
       }
       return next;
