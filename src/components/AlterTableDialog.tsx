@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
 import type { Theme } from '../theme';
 import type { DbType, SchemaColumn } from '../api';
@@ -29,8 +29,10 @@ export function AlterTableDialog({ dbType, schema, table, columns, onSubmit, onC
   const dialect = dialectFor(dbType);
   const typeOptions = dialect === 'postgres' ? POSTGRES_TYPES : MYSQL_TYPES;
 
-  const [cols, setCols] = useState<AlterTableColumn[]>(() =>
+  type ColState = AlterTableColumn & { id: string };
+  const [cols, setCols] = useState<ColState[]>(() =>
     columns.map(c => ({
+      id: c.name,
       originalName: c.name,
       name: c.name,
       type: c.type,
@@ -75,7 +77,7 @@ export function AlterTableDialog({ dbType, schema, table, columns, onSubmit, onC
 
   const addColumn = () => setCols(cs => [
     ...cs,
-    { originalName: null, name: '', type: typeOptions[0], nullable: true, default: null, autoIncrement: false, pk: false, dropped: false },
+    { id: crypto.randomUUID(), originalName: null, name: '', type: typeOptions[0], nullable: true, default: null, autoIncrement: false, pk: false, dropped: false },
   ]);
 
   const removeNew = (i: number) => setCols(cs => cs.filter((_, idx) => idx !== i));
@@ -163,33 +165,29 @@ export function AlterTableDialog({ dbType, schema, table, columns, onSubmit, onC
 
               if (c.dropped) {
                 return (
-                  <>
-                    <span key={`${i}-name`} style={{ ...inputStyle, padding: '6px 10px', fontSize: 12 }}>{c.originalName}</span>
-                    <span key={`${i}-type`} style={{ ...inputStyle, padding: '6px 10px', fontSize: 12 }}>{c.type}</span>
-                    <span key={`${i}-null`} />
-                    <span key={`${i}-default`} />
+                  <Fragment key={c.id}>
+                    <span style={{ ...inputStyle, padding: '6px 10px', fontSize: 12 }}>{c.originalName}</span>
+                    <span style={{ ...inputStyle, padding: '6px 10px', fontSize: 12 }}>{c.type}</span>
+                    <span />
+                    <span />
                     <button
-                      key={`${i}-restore`}
                       onClick={() => updateCol(i, { dropped: false })}
                       style={{ ...s.iconBtn, color: t.accent }}
                       title="Restore column"
                     >↩</button>
-                  </>
+                  </Fragment>
                 );
               }
 
               return (
-                <>
+                <Fragment key={c.id}>
                   <input
-                    key={`${i}-name`}
                     style={s.input}
                     value={c.name}
                     onChange={(e) => updateCol(i, { name: e.target.value })}
                     placeholder="column_name"
-                    readOnly={!isNew && false}
                   />
                   <input
-                    key={`${i}-type`}
                     style={s.input}
                     value={c.type}
                     list="helix-alter-table-types"
@@ -197,7 +195,6 @@ export function AlterTableDialog({ dbType, schema, table, columns, onSubmit, onC
                     placeholder="TYPE"
                   />
                   <input
-                    key={`${i}-null`}
                     type="checkbox"
                     checked={c.nullable}
                     onChange={(e) => updateCol(i, { nullable: e.target.checked })}
@@ -205,20 +202,18 @@ export function AlterTableDialog({ dbType, schema, table, columns, onSubmit, onC
                     disabled={!c.nullable && c.pk}
                   />
                   <input
-                    key={`${i}-default`}
                     style={s.input}
                     value={c.default ?? ''}
                     onChange={(e) => updateCol(i, { default: e.target.value || null })}
                     placeholder="(none)"
                   />
                   <button
-                    key={`${i}-remove`}
                     onClick={() => isNew ? removeNew(i) : updateCol(i, { dropped: true })}
                     style={{ ...s.iconBtn, color: t.colorError }}
                     title={isNew ? 'Remove column' : 'Drop column'}
                     aria-label="Drop column"
                   >×</button>
-                </>
+                </Fragment>
               );
             })}
           </div>

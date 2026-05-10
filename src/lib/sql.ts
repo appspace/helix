@@ -94,7 +94,9 @@ export function buildAlterTableSql(
           (col.default ?? '') !== (orig.default ?? '')
         );
         if (renamed || changed) {
-          clauses.push(`CHANGE COLUMN ${q(col.originalName)} ${colDefExpr(dialect, col)}`);
+          // Omit PRIMARY KEY from CHANGE COLUMN — repeating the inline constraint
+          // is treated as adding a second PK and MySQL rejects it (ERROR 1068).
+          clauses.push(`CHANGE COLUMN ${q(col.originalName)} ${colDefExpr(dialect, { ...col, pk: false })}`);
         }
       }
     }

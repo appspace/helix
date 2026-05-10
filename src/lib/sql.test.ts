@@ -309,4 +309,13 @@ describe('buildAlterTableSql', () => {
     const stmts2 = buildAlterTableSql('postgres', null, 't', [noDefault], [pgBase2]);
     expect(stmts2[0]).toContain('DROP DEFAULT');
   });
+
+  it('MySQL: CHANGE COLUMN on a PK column omits inline PRIMARY KEY', () => {
+    const pkBase: CreateTableColumn = { name: 'id', type: 'INT', nullable: false, default: null, autoIncrement: true, pk: true };
+    const renamed = col({ originalName: 'id', name: 'user_id', type: 'BIGINT', nullable: false, autoIncrement: true, pk: true });
+    const stmts = buildAlterTableSql('mysql', null, 'users', [renamed], [pkBase]);
+    expect(stmts).toHaveLength(1);
+    expect(stmts[0]).toContain('CHANGE COLUMN `id` `user_id` BIGINT NOT NULL AUTO_INCREMENT');
+    expect(stmts[0]).not.toContain('PRIMARY KEY');
+  });
 });
