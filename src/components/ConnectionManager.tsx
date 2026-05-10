@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import type { CSSProperties } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import type { Theme } from '../theme';
 import { api } from '../api';
 import { listSavedConnections, deleteSavedConnection, type SavedConnection } from '../savedConnections';
@@ -34,22 +34,75 @@ interface ConnectionManagerProps {
   t: Theme;
 }
 
-const defaultPort = (type: DbType): string => {
-  if (type === 'postgres') return '5432';
-  if (type === 'mongodb') return '27017';
-  return '3306';
-};
+interface DbTypeMeta {
+  id: DbType;
+  name: string;
+  badge: 'SQL' | 'NoSQL';
+  version: string;
+  desc: string;
+  defaultPort: string;
+  defaultUser: string;
+  icon: (color: string) => ReactNode;
+}
 
-const dbLabel = (type: DbType): string => {
-  if (type === 'postgres') return 'PostgreSQL';
-  if (type === 'mongodb') return 'MongoDB';
-  return 'MySQL';
-};
+const DB_TYPES: DbTypeMeta[] = [
+  {
+    id: 'mysql',
+    name: 'MySQL',
+    badge: 'SQL',
+    version: '5.7 – 8.x',
+    desc: 'Popular open source relational database',
+    defaultPort: '3306',
+    defaultUser: 'root',
+    icon: (color) => (
+      <svg width="22" height="22" viewBox="0 0 40 40" fill="none">
+        <ellipse cx="20" cy="12" rx="14" ry="5" stroke={color} strokeWidth="2.5" fill="none"/>
+        <path d="M6 12v16c0 2.76 6.27 5 14 5s14-2.24 14-5V12" stroke={color} strokeWidth="2.5" fill="none"/>
+        <path d="M6 20c0 2.76 6.27 5 14 5s14-2.24 14-5" stroke={color} strokeWidth="1.5" fill="none" opacity="0.5"/>
+      </svg>
+    ),
+  },
+  {
+    id: 'postgres',
+    name: 'PostgreSQL',
+    badge: 'SQL',
+    version: '12 – 16',
+    desc: 'Advanced relational database with powerful extensions',
+    defaultPort: '5432',
+    defaultUser: 'postgres',
+    icon: (color) => (
+      <svg width="22" height="22" viewBox="0 0 40 40" fill="none">
+        <ellipse cx="20" cy="12" rx="14" ry="5" stroke={color} strokeWidth="2.5" fill="none"/>
+        <path d="M6 12v16c0 2.76 6.27 5 14 5s14-2.24 14-5V12" stroke={color} strokeWidth="2.5" fill="none"/>
+        <path d="M6 20c0 2.76 6.27 5 14 5s14-2.24 14-5" stroke={color} strokeWidth="1.5" fill="none" opacity="0.5"/>
+        <path d="M27 8 C32 4, 37 10, 33 16" stroke={color} strokeWidth="1.5" strokeLinecap="round" fill="none"/>
+      </svg>
+    ),
+  },
+  {
+    id: 'mongodb',
+    name: 'MongoDB',
+    badge: 'NoSQL',
+    version: '4.4 – 7.x',
+    desc: 'Flexible document database for modern applications',
+    defaultPort: '27017',
+    defaultUser: '',
+    icon: (color) => (
+      <svg width="22" height="22" viewBox="0 0 40 40" fill="none">
+        <path d="M20 4 C20 4, 28 14, 28 22 C28 30, 24 36, 20 36 C16 36, 12 30, 12 22 C12 14, 20 4, 20 4Z" stroke={color} strokeWidth="2.5" fill="none"/>
+        <line x1="20" y1="30" x2="20" y2="38" stroke={color} strokeWidth="1.5" strokeLinecap="round"/>
+      </svg>
+    ),
+  },
+];
+
+const dbMeta = (type: DbType): DbTypeMeta => DB_TYPES.find(d => d.id === type) ?? DB_TYPES[0];
+const defaultPort = (type: DbType): string => dbMeta(type).defaultPort;
 
 // Mirrors `connectionLabel` in `server/src/routes/connect.ts`: rewrites
 // `mongodb+srv://` so WHATWG URL populates host/username, and prefers
 // `hostname` over `host` so we never leak an explicit port. Returns just the
-// host portion (no `user@`) for the autocomplete subtitle. Falls back to a
+// host portion (no `user@`) for the saved-list subtitle. Falls back to a
 // neutral placeholder rather than the raw URI so a malformed entry — or one
 // we can't parse — never displays an embedded password.
 const hostFromConnectionString = (uri: string): string => {
@@ -81,25 +134,28 @@ const formFromSaved = (entry: SavedConnection): ConnectionForm => {
   };
 };
 
+const freshFormFor = (type: DbType): ConnectionForm => {
+  const d = dbMeta(type);
+  return {
+    name: `Local ${d.name}`,
+    type,
+    host: import.meta.env['VITE_DEFAULT_HOST'] ?? 'localhost',
+    port: import.meta.env['VITE_DEFAULT_PORT'] ?? d.defaultPort,
+    user: import.meta.env['VITE_DEFAULT_USER'] ?? d.defaultUser,
+    password: '',
+    database: '',
+    ssl: false,
+    sslVerify: true,
+    savePassword: false,
+    mongoMode: type === 'mongodb' ? 'fields' : undefined,
+  };
+};
+
 export function ConnectionManager({ onConnect, isConnecting, error, t }: ConnectionManagerProps) {
   const [saved, setSaved] = useState<SavedConnection[]>(() => listSavedConnections());
-  const [form, setForm] = useState<ConnectionForm>(() => {
-    const list = listSavedConnections();
-    if (list[0]) return formFromSaved(list[0]);
-    return {
-      name: 'Local MySQL',
-      type: 'mysql',
-      host: import.meta.env['VITE_DEFAULT_HOST'] ?? 'localhost',
-      port: import.meta.env['VITE_DEFAULT_PORT'] ?? '3306',
-      user: import.meta.env['VITE_DEFAULT_USER'] ?? 'root',
-      password: '', database: '', ssl: false, sslVerify: true, savePassword: false,
-      mongoMode: 'fields',
-    };
-  });
-  // Track the saved entry currently reflected in the form, so we only auto-populate once per match.
-  const [appliedSaved, setAppliedSaved] = useState<string>(saved[0]?.name ?? '');
-  const [suggestOpen, setSuggestOpen] = useState(false);
-  const [highlightIdx, setHighlightIdx] = useState(-1);
+  const [step, setStep] = useState<'pick' | 'form'>('pick');
+  const [form, setForm] = useState<ConnectionForm>(() => freshFormFor('mysql'));
+  const [appliedSaved, setAppliedSaved] = useState<string>('');
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: true } | { ok: false; error: string } | null>(null);
   const [canSavePassword, setCanSavePassword] = useState(false);
@@ -110,21 +166,7 @@ export function ConnectionManager({ onConnect, isConnecting, error, t }: Connect
     return () => { cancelled = true; };
   }, []);
 
-  // If the initial saved entry has a stored password, load it on mount.
-  useEffect(() => {
-    const first = saved[0];
-    if (!first?.savePassword || !electronAPI) return;
-    let cancelled = false;
-    electronAPI.passwords.load(first.name).then(pw => {
-      if (cancelled || pw === null) return;
-      setForm(p => p.name === first.name && p.password === '' ? { ...p, password: pw } : p);
-    }).catch(() => {});
-    return () => { cancelled = true; };
-  // Intentional empty deps — we only want to load the password for the connection
-  // that was active when the modal opened, not on every re-render.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
+  const meta = dbMeta(form.type);
   const isMongoUri = form.type === 'mongodb' && form.mongoMode === 'uri';
 
   const buildSubmitForm = (): ConnectionForm => {
@@ -153,46 +195,33 @@ export function ConnectionManager({ onConnect, isConnecting, error, t }: Connect
     setTestResult(null);
   };
 
-  const setDbType = (next: DbType) => {
-    setForm(p => {
-      const prevDefault = defaultPort(p.type);
-      const portIsPrevDefault = p.port === '' || p.port === prevDefault;
-      const nextMongoMode = next === 'mongodb' ? (p.mongoMode ?? 'fields') : 'fields';
-      return {
-        ...p,
-        type: next,
-        port: portIsPrevDefault ? defaultPort(next) : p.port,
-        mongoMode: nextMongoMode,
-        connectionString: next === 'mongodb' ? p.connectionString : undefined,
-      };
-    });
-    setTestResult(null);
-  };
-
   const setMongoMode = (mode: 'fields' | 'uri') => {
     setForm(p => ({ ...p, mongoMode: mode }));
     setTestResult(null);
   };
 
+  const pickFreshDb = (type: DbType) => {
+    setForm(freshFormFor(type));
+    setAppliedSaved('');
+    setTestResult(null);
+    setStep('form');
+  };
+
   const applySaved = (entry: SavedConnection) => {
     setForm(formFromSaved(entry));
     setAppliedSaved(entry.name);
-    setSuggestOpen(false);
+    setTestResult(null);
     if (entry.savePassword && electronAPI) {
       electronAPI.passwords.load(entry.name).then(pw => {
         if (pw === null) return;
         setForm(p => p.name === entry.name && p.password === '' ? { ...p, password: pw } : p);
       }).catch(() => {});
     }
+    setStep('form');
   };
 
-  const onNameChange = (value: string) => {
-    setForm(p => ({ ...p, name: value }));
-    if (appliedSaved && appliedSaved !== value) setAppliedSaved('');
-    setHighlightIdx(-1);
-  };
-
-  const removeSaved = (name: string) => {
+  const removeSaved = (name: string, e?: React.MouseEvent) => {
+    e?.stopPropagation();
     deleteSavedConnection(name);
     electronAPI?.passwords.delete(name).catch(() => {});
     const next = listSavedConnections();
@@ -200,58 +229,109 @@ export function ConnectionManager({ onConnect, isConnecting, error, t }: Connect
     if (appliedSaved === name) setAppliedSaved('');
   };
 
-  const filteredSaved = (() => {
-    const q = form.name.trim().toLowerCase();
-    if (!q) return saved;
-    const starts = saved.filter(c => c.name.toLowerCase().startsWith(q));
-    const includes = saved.filter(c => !c.name.toLowerCase().startsWith(q) && c.name.toLowerCase().includes(q));
-    return [...starts, ...includes];
-  })();
-
   const s = {
-    overlay: { position: 'fixed', inset: 0, background: t.bgBase + 'EE', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 300 } as CSSProperties,
-    modal: { width: 460, background: t.bgElevated, border: `1px solid ${t.border}`, borderRadius: 12, overflow: 'hidden', boxShadow: t.shadowModal } as CSSProperties,
-    header: { padding: '20px 24px', borderBottom: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', gap: 14, background: t.bgSurface } as CSSProperties,
-    title: { fontSize: 16, fontWeight: 600, color: t.textPrimary, fontFamily: '"Space Grotesk", sans-serif' } as CSSProperties,
-    subtitle: { fontSize: 12, color: t.textMuted, marginTop: 2 } as CSSProperties,
-    body: { padding: 20, display: 'flex', flexDirection: 'column', gap: 14 } as CSSProperties,
-    row: { display: 'flex', gap: 10 } as CSSProperties,
-    field: { display: 'flex', flexDirection: 'column', gap: 5 } as CSSProperties,
+    overlay: { position: 'fixed', inset: 0, background: t.bgBase, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', zIndex: 300 } as CSSProperties,
+    modal: { width: 500, maxWidth: '92vw', background: t.bgElevated, border: `1px solid ${t.border}`, borderRadius: 12, overflow: 'hidden', boxShadow: t.shadowModal } as CSSProperties,
+    header: { padding: '18px 22px', borderBottom: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', gap: 12, background: t.bgSurface } as CSSProperties,
+    title: { fontSize: 15, fontWeight: 600, color: t.textPrimary, fontFamily: '"Space Grotesk", sans-serif' } as CSSProperties,
+    subtitle: { fontSize: 11, color: t.textMuted, marginTop: 2 } as CSSProperties,
+    body: { padding: '18px 22px', display: 'flex', flexDirection: 'column', gap: 10 } as CSSProperties,
     label: { fontSize: 10, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', color: t.textMuted, fontFamily: '"IBM Plex Sans", sans-serif' } as CSSProperties,
-    input: { height: 32, background: t.bgInput, border: `1px solid ${t.border}`, borderRadius: 5, padding: '0 10px', fontFamily: '"IBM Plex Sans", sans-serif', fontSize: 13, color: t.textPrimary, outline: 'none', width: '100%' } as CSSProperties,
-    toggleRow: { display: 'flex', alignItems: 'center', gap: 10 } as CSSProperties,
-    toggleLabel: { fontSize: 13, color: t.textSecondary } as CSSProperties,
-    sslBadge: { fontSize: 10, fontWeight: 600, color: t.accent, background: t.accentMuted, border: `1px solid ${t.borderAccent}`, padding: '2px 8px', borderRadius: 9999 } as CSSProperties,
-    errorBanner: { display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', background: t.colorErrorBg, border: `1px solid ${t.colorErrorBorder}`, borderRadius: 6, fontSize: 12, color: t.colorError, fontFamily: 'monospace' } as CSSProperties,
-    footer: { padding: '14px 20px', borderTop: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', gap: 10, background: t.bgSurface } as CSSProperties,
-    testBtn: { height: 32, padding: '0 14px', background: 'transparent', border: `1px solid ${t.border}`, borderRadius: 5, fontSize: 12, color: t.textSecondary, cursor: 'pointer', fontFamily: '"IBM Plex Sans", sans-serif' } as CSSProperties,
-    connectBtn: { height: 32, padding: '0 18px', background: t.accent, border: 'none', borderRadius: 5, fontSize: 13, fontWeight: 600, color: t.textInverse, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontFamily: '"IBM Plex Sans", sans-serif' } as CSSProperties,
+    field: { display: 'flex', flexDirection: 'column', gap: 4 } as CSSProperties,
+    input: { height: 32, background: t.bgInput, border: `1px solid ${t.border}`, borderRadius: 5, padding: '0 10px', fontSize: 13, color: t.textPrimary, outline: 'none', width: '100%', fontFamily: 'inherit', boxSizing: 'border-box' } as CSSProperties,
+    row: { display: 'flex', gap: 10 } as CSSProperties,
+    footer: { padding: '12px 22px', borderTop: `1px solid ${t.border}`, background: t.bgSurface, display: 'flex', alignItems: 'center', gap: 10 } as CSSProperties,
+    testBtn: { height: 32, padding: '0 14px', background: 'transparent', border: `1px solid ${t.border}`, borderRadius: 5, fontSize: 12, color: t.textSecondary, cursor: 'pointer', fontFamily: 'inherit' } as CSSProperties,
+    connectBtn: { height: 32, padding: '0 18px', background: t.accent, border: 'none', borderRadius: 5, fontSize: 13, fontWeight: 600, color: t.textInverse, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'inherit' } as CSSProperties,
+    backBtn: { background: 'none', border: 'none', cursor: 'pointer', color: t.textMuted, display: 'flex', alignItems: 'center', padding: '2px 4px', borderRadius: 4 } as CSSProperties,
+    dbCard: { display: 'flex', alignItems: 'center', gap: 14, padding: '14px 18px', background: t.bgElevated, border: `1px solid ${t.border}`, borderRadius: 8, cursor: 'pointer', transition: 'border-color 120ms ease' } as CSSProperties,
+    dbCardIcon: { width: 40, height: 40, background: t.accentMuted, border: `1px solid ${t.borderAccent}`, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 } as CSSProperties,
+    badge: { fontSize: 9, fontWeight: 600, color: t.accent, background: t.accentMuted, border: `1px solid ${t.borderAccent}`, padding: '1px 6px', borderRadius: 9999, letterSpacing: '0.04em' } as CSSProperties,
+    sectionLabel: { fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: t.textMuted, padding: '0 4px' } as CSSProperties,
+    errorBanner: { display: 'flex', alignItems: 'center', gap: 8, padding: '9px 12px', background: t.colorErrorBg, border: `1px solid ${t.colorErrorBorder}`, borderRadius: 6, fontSize: 12, color: t.colorError, fontFamily: 'monospace' } as CSSProperties,
   };
 
-  const dbTypeBtnStyle = (active: boolean): CSSProperties => ({
-    height: 30, padding: '0 14px',
-    background: active ? t.accent : t.bgInput,
-    border: `1px solid ${active ? t.accent : t.border}`,
-    borderRadius: 5, fontSize: 12, fontWeight: active ? 600 : 400,
-    color: active ? t.textInverse : t.textSecondary,
-    cursor: 'pointer', fontFamily: '"IBM Plex Sans", sans-serif',
-    transition: 'background 120ms, color 120ms, border-color 120ms',
-  });
+  // ─────────────────────────────────────────────────────────
+  // Step 1 — Picker (saved connections + DB type cards)
+  // ─────────────────────────────────────────────────────────
+  if (step === 'pick') {
+    return (
+      <div style={s.overlay}>
+        <div style={s.modal}>
+          <div style={s.header}>
+            <svg width="20" height="20" viewBox="0 0 40 40" fill="none">
+              <path d="M6 6 C6 6, 20 2, 20 20 C20 38, 6 34, 6 34" stroke={t.accent} strokeWidth="2.5" strokeLinecap="round"/>
+              <path d="M16 6 C16 6, 30 2, 30 20 C30 38, 16 34, 16 34" stroke={t.accent} strokeWidth="2.5" strokeLinecap="round" opacity="0.5"/>
+              <circle cx="6"  cy="6"  r="2.5" fill={t.accent}/>
+              <circle cx="20" cy="20" r="2.5" fill={t.accent}/>
+              <circle cx="6"  cy="34" r="2.5" fill={t.accent}/>
+            </svg>
+            <div>
+              <div style={s.title}>Connect to a database</div>
+              <div style={s.subtitle}>
+                {saved.length > 0 ? 'Pick a saved connection or start fresh' : 'Select the database type to get started'}
+              </div>
+            </div>
+          </div>
 
+          <div style={{ padding: '16px 22px 20px', display: 'flex', flexDirection: 'column', gap: 14, maxHeight: '70vh', overflowY: 'auto' }}>
+            {saved.length > 0 && (
+              <>
+                <div style={s.sectionLabel}>Saved connections</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {saved.map(entry => {
+                    const m = dbMeta(entry.type ?? 'mysql');
+                    const subtitle = (entry.user || entry.host || entry.port)
+                      ? `${entry.user}@${entry.host}:${entry.port}`
+                      : entry.connectionString
+                        ? hostFromConnectionString(entry.connectionString)
+                        : '';
+                    return (
+                      <SavedRow
+                        key={entry.name}
+                        name={entry.name}
+                        subtitle={subtitle}
+                        meta={m}
+                        ssl={!!entry.ssl}
+                        database={entry.database}
+                        onClick={() => applySaved(entry)}
+                        onForget={(e) => removeSaved(entry.name, e)}
+                        t={t}
+                      />
+                    );
+                  })}
+                </div>
+                <div style={{ ...s.sectionLabel, marginTop: 6 }}>Or start fresh</div>
+              </>
+            )}
+
+            {DB_TYPES.map(d => (
+              <DbCard key={d.id} meta={d} onClick={() => pickFreshDb(d.id)} t={t} s={s}/>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // Step 2 — Connection form
+  // ─────────────────────────────────────────────────────────
   return (
     <div style={s.overlay}>
       <div style={s.modal}>
         <div style={s.header}>
-          <svg width="20" height="20" viewBox="0 0 40 40" fill="none">
-            <path d="M6 6 C6 6, 20 2, 20 20 C20 38, 6 34, 6 34" stroke={t.accent} strokeWidth="2.5" strokeLinecap="round"/>
-            <path d="M16 6 C16 6, 30 2, 30 20 C30 38, 16 34, 16 34" stroke={t.accent} strokeWidth="2.5" strokeLinecap="round" opacity="0.5"/>
-            <circle cx="6" cy="6" r="2.5" fill={t.accent}/>
-            <circle cx="20" cy="20" r="2.5" fill={t.accent}/>
-            <circle cx="6" cy="34" r="2.5" fill={t.accent}/>
-          </svg>
+          <button type="button" style={s.backBtn} onClick={() => setStep('pick')} title="Back">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="15 18 9 12 15 6"/>
+            </svg>
+          </button>
+          <div style={{ width: 32, height: 32, background: t.accentMuted, border: `1px solid ${t.borderAccent}`, borderRadius: 7, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            {meta.icon(t.accent)}
+          </div>
           <div>
-            <div style={s.title}>New connection</div>
-            <div style={s.subtitle}>Connect to a {dbLabel(form.type)} server</div>
+            <div style={s.title}>{appliedSaved || `New ${meta.name} connection`}</div>
+            <div style={s.subtitle}>{meta.badge} · port {meta.defaultPort}</div>
           </div>
         </div>
 
@@ -265,122 +345,44 @@ export function ConnectionManager({ onConnect, isConnecting, error, t }: Connect
         >
           <div style={s.body}>
             <div style={s.field}>
-              <label style={s.label}>Database type</label>
-              <div style={{ display: 'flex', gap: 6 }}>
-                {(['mysql', 'postgres', 'mongodb'] as const).map(dbType => (
-                  <button
-                    key={dbType}
-                    type="button"
-                    onClick={() => setDbType(dbType)}
-                    style={dbTypeBtnStyle(form.type === dbType)}
-                  >
-                    {dbLabel(dbType)}
-                  </button>
-                ))}
-              </div>
+              <label style={s.label}>Connection name</label>
+              <input
+                style={s.input}
+                name="connection-name"
+                autoComplete="off"
+                value={form.name}
+                onChange={e => set('name', e.target.value)}
+                placeholder="My Database"
+              />
             </div>
 
             {form.type === 'mongodb' && (
               <div style={s.field}>
                 <label style={s.label}>Input mode</label>
                 <div style={{ display: 'flex', gap: 6 }}>
-                  {(['fields', 'uri'] as const).map(mode => (
-                    <button
-                      key={mode}
-                      type="button"
-                      onClick={() => setMongoMode(mode)}
-                      style={dbTypeBtnStyle(form.mongoMode === mode)}
-                    >
-                      {mode === 'fields' ? 'Fields' : 'Connection string'}
-                    </button>
-                  ))}
+                  {(['fields', 'uri'] as const).map(mode => {
+                    const active = form.mongoMode === mode;
+                    return (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => setMongoMode(mode)}
+                        style={{
+                          height: 30, padding: '0 14px',
+                          background: active ? t.accent : t.bgInput,
+                          border: `1px solid ${active ? t.accent : t.border}`,
+                          borderRadius: 5, fontSize: 12, fontWeight: active ? 600 : 400,
+                          color: active ? t.textInverse : t.textSecondary,
+                          cursor: 'pointer', fontFamily: 'inherit',
+                        }}
+                      >
+                        {mode === 'fields' ? 'Fields' : 'Connection string'}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
             )}
-
-            <div style={s.field}>
-              <label style={s.label}>
-                Connection name
-                {saved.length > 0 && (
-                  <span style={{ color: t.textMuted, textTransform: 'none', letterSpacing: 0, fontWeight: 400, marginLeft: 6 }}>
-                    — start typing to see saved connections
-                  </span>
-                )}
-              </label>
-              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                <div style={{ position: 'relative', flex: 1 }}>
-                  <input
-                    style={s.input}
-                    name="connection-name"
-                    autoComplete="off"
-                    value={form.name}
-                    onChange={e => onNameChange(e.target.value)}
-                    onFocus={() => { if (saved.length > 0) { setSuggestOpen(true); setHighlightIdx(-1); } }}
-                    onBlur={() => setTimeout(() => setSuggestOpen(false), 120)}
-                    onKeyDown={(e) => {
-                      if (!suggestOpen || filteredSaved.length === 0) return;
-                      if (e.key === 'ArrowDown') { e.preventDefault(); setHighlightIdx(i => Math.min(i + 1, filteredSaved.length - 1)); }
-                      else if (e.key === 'ArrowUp') { e.preventDefault(); setHighlightIdx(i => Math.max(i - 1, 0)); }
-                      else if (e.key === 'Enter' && highlightIdx >= 0) { e.preventDefault(); applySaved(filteredSaved[highlightIdx]); }
-                      else if (e.key === 'Escape') { e.preventDefault(); e.nativeEvent.stopImmediatePropagation(); setSuggestOpen(false); }
-                    }}
-                    placeholder="My Database"
-                  />
-                  {suggestOpen && filteredSaved.length > 0 && (
-                    <div
-                      role="listbox"
-                      style={{
-                        position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0, zIndex: 10,
-                        background: t.bgElevated, border: `1px solid ${t.border}`, borderRadius: 6,
-                        boxShadow: t.shadowLg, maxHeight: 240, overflowY: 'auto', padding: 4,
-                      }}
-                    >
-                      {filteredSaved.map((c, i) => {
-                        const highlighted = i === highlightIdx;
-                        return (
-                          <div
-                            key={c.name}
-                            role="option"
-                            aria-selected={highlighted}
-                            onMouseEnter={() => setHighlightIdx(i)}
-                            onMouseDown={(e) => { e.preventDefault(); applySaved(c); }}
-                            style={{
-                              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
-                              padding: '8px 10px', borderRadius: 4, cursor: 'pointer',
-                              background: highlighted ? t.bgHover : 'transparent',
-                            }}
-                          >
-                            <div style={{ minWidth: 0 }}>
-                              <div style={{ fontSize: 12, color: t.textPrimary, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</div>
-                              <div style={{ fontSize: 11, color: t.textMuted, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                {(c.user || c.host || c.port)
-                                  ? <>{c.user}@{c.host}:{c.port}</>
-                                  : c.connectionString
-                                    ? <>{hostFromConnectionString(c.connectionString)}</>
-                                    : null}
-                                {c.database && <span style={{ marginLeft: 6 }}>· {c.database}</span>}
-                                {c.ssl && <span style={{ marginLeft: 6, color: t.accent }}>· SSL</span>}
-                              </div>
-                            </div>
-                            {appliedSaved === c.name && (
-                              <span style={{ fontSize: 10, color: t.accent, textTransform: 'uppercase', letterSpacing: '0.05em' }}>current</span>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-                {appliedSaved && (
-                  <button
-                    type="button"
-                    onClick={() => removeSaved(appliedSaved)}
-                    title={`Forget '${appliedSaved}'`}
-                    style={{ height: 32, padding: '0 10px', background: 'transparent', border: `1px solid ${t.border}`, borderRadius: 5, color: t.textMuted, cursor: 'pointer', fontSize: 12, fontFamily: 'inherit' }}
-                  >Forget</button>
-                )}
-              </div>
-            </div>
 
             {isMongoUri ? (
               <div style={s.field}>
@@ -411,12 +413,12 @@ export function ConnectionManager({ onConnect, isConnecting, error, t }: Connect
                   <div style={{ ...s.field, width: 90 }}>
                     <label style={s.label}>Port</label>
                     <input
-                      style={{ ...s.input, fontFamily: 'monospace' }}
+                      style={{ ...s.input, fontFamily: '"JetBrains Mono", monospace', fontSize: 12 }}
                       name="port"
                       autoComplete="off"
                       value={form.port}
                       onChange={e => set('port', e.target.value)}
-                      placeholder={defaultPort(form.type)}
+                      placeholder={meta.defaultPort}
                     />
                   </div>
                 </div>
@@ -430,7 +432,7 @@ export function ConnectionManager({ onConnect, isConnecting, error, t }: Connect
                       autoComplete="username"
                       value={form.user}
                       onChange={e => set('user', e.target.value)}
-                      placeholder="root"
+                      placeholder={meta.defaultUser || 'username'}
                     />
                   </div>
                   <div style={{ ...s.field, flex: 1 }}>
@@ -448,7 +450,7 @@ export function ConnectionManager({ onConnect, isConnecting, error, t }: Connect
                 </div>
 
                 {canSavePassword && (
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginTop: -4 }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginTop: -2 }}>
                     <input
                       type="checkbox"
                       checked={form.savePassword}
@@ -473,21 +475,21 @@ export function ConnectionManager({ onConnect, isConnecting, error, t }: Connect
                 autoComplete="off"
                 value={form.database}
                 onChange={e => set('database', e.target.value)}
-                placeholder="my_database"
+                placeholder={form.type === 'postgres' ? 'postgres' : 'my_database'}
               />
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <div style={s.toggleRow}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <button
                   type="button"
-                  style={{ width: 34, height: 20, borderRadius: 9999, border: 'none', cursor: 'pointer', position: 'relative', flexShrink: 0, transition: 'background 150ms ease', background: form.ssl ? t.accent : t.border }}
+                  style={{ width: 34, height: 20, borderRadius: 9999, border: 'none', cursor: 'pointer', position: 'relative', flexShrink: 0, background: form.ssl ? t.accent : t.border, transition: 'background 150ms ease' }}
                   onClick={() => set('ssl', !form.ssl)}
                 >
                   <div style={{ position: 'absolute', width: 14, height: 14, background: 'white', borderRadius: '50%', top: 3, left: form.ssl ? 17 : 3, transition: 'left 150ms ease' }}/>
                 </button>
-                <span style={s.toggleLabel}>Use SSL / TLS</span>
-                {form.ssl && <span style={s.sslBadge}>Encrypted</span>}
+                <span style={{ fontSize: 13, color: t.textSecondary }}>Use SSL / TLS</span>
+                {form.ssl && <span style={{ fontSize: 10, fontWeight: 600, color: t.accent, background: t.accentMuted, border: `1px solid ${t.borderAccent}`, padding: '1px 8px', borderRadius: 9999 }}>Encrypted</span>}
               </div>
 
               {form.ssl && (
@@ -524,7 +526,7 @@ export function ConnectionManager({ onConnect, isConnecting, error, t }: Connect
             )}
 
             {testResult && testResult.ok && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', background: t.colorSuccessBg, border: `1px solid ${t.colorSuccess}55`, borderRadius: 6, fontSize: 12, color: t.colorSuccess }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 12px', background: t.colorSuccessBg, border: `1px solid ${t.colorSuccess}55`, borderRadius: 6, fontSize: 12, color: t.colorSuccess }}>
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={t.colorSuccess} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <polyline points="20 6 9 17 4 12"/>
                 </svg>
@@ -562,6 +564,87 @@ export function ConnectionManager({ onConnect, isConnecting, error, t }: Connect
           </div>
         </form>
       </div>
+    </div>
+  );
+}
+
+// Picker card for one of the supported DB types.
+function DbCard({ meta, onClick, t, s }: {
+  meta: DbTypeMeta;
+  onClick: () => void;
+  t: Theme;
+  s: Record<string, CSSProperties>;
+}) {
+  return (
+    <div
+      style={s.dbCard}
+      onClick={onClick}
+      onMouseEnter={(e) => { e.currentTarget.style.borderColor = t.borderAccent; }}
+      onMouseLeave={(e) => { e.currentTarget.style.borderColor = t.border; }}
+    >
+      <div style={s.dbCardIcon}>{meta.icon(t.accent)}</div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 3 }}>
+          <span style={{ fontSize: 14, fontWeight: 600, color: t.textPrimary }}>{meta.name}</span>
+          <span style={s.badge}>{meta.badge}</span>
+          <span style={{ fontSize: 11, color: t.textMuted }}>{meta.version}</span>
+        </div>
+        <span style={{ fontSize: 12, color: t.textMuted }}>{meta.desc}</span>
+      </div>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={t.textMuted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <polyline points="9 18 15 12 9 6"/>
+      </svg>
+    </div>
+  );
+}
+
+// Saved-connection row on the picker step. Click = restore + go to form.
+function SavedRow({ name, subtitle, meta, ssl, database, onClick, onForget, t }: {
+  name: string;
+  subtitle: string;
+  meta: DbTypeMeta;
+  ssl: boolean;
+  database?: string;
+  onClick: () => void;
+  onForget: (e: React.MouseEvent) => void;
+  t: Theme;
+}) {
+  const [hovered, setHovered] = useState(false);
+  return (
+    <div
+      onClick={onClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 12,
+        padding: '10px 14px',
+        background: hovered ? t.bgHover : 'transparent',
+        border: `1px solid ${hovered ? t.borderAccent : t.borderSubtle}`,
+        borderRadius: 7, cursor: 'pointer', minWidth: 0,
+      }}
+    >
+      <div style={{ width: 28, height: 28, background: t.accentMuted, border: `1px solid ${t.borderAccent}`, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+        <span style={{ width: 18, height: 18, display: 'inline-flex' }}>{meta.icon(t.accent)}</span>
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 500, color: t.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</div>
+        <div style={{ fontSize: 11, color: t.textMuted, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {subtitle}
+          {database && <span> · {database}</span>}
+          {ssl && <span style={{ color: t.accent }}> · SSL</span>}
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={onForget}
+        title={`Forget '${name}'`}
+        style={{
+          background: 'transparent', border: 'none', cursor: 'pointer',
+          color: t.textMuted, padding: '4px 6px', fontSize: 11, fontFamily: 'inherit',
+          opacity: hovered ? 1 : 0,
+          transition: 'opacity 100ms ease',
+        }}
+      >Forget</button>
     </div>
   );
 }
