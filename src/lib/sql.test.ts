@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatSqlValue, buildInsertSql, parseEnumValues, buildDefaultTableQuery, buildCreateTableSql, type CreateTableColumn } from './sql';
+import { formatSqlValue, buildInsertSql, parseEnumValues, buildDefaultTableQuery, buildCreateTableSql, buildAlterTableSql, type CreateTableColumn, type AlterTableColumn } from './sql';
 
 describe('parseEnumValues', () => {
   it('parses a standard enum type', () => {
@@ -194,5 +194,119 @@ describe('buildCreateTableSql', () => {
     // the user can't accidentally close the quoted identifier mid-token.
     const sql = buildCreateTableSql('mysql', null, 'evil`name', [idCol]);
     expect(sql).toContain('CREATE TABLE `evilname` (');
+  });
+});
+
+describe('buildAlterTableSql', () => {
+  const base: CreateTableColumn = {
+    name: 'email', type: 'VARCHAR(255)', nullable: false, default: null, autoIncrement: false, pk: false,
+  };
+
+  function col(overrides: Partial<AlterTableColumn> & { originalName: string | null }): AlterTableColumn {
+    return {
+      name: overrides.originalName ?? 'col',
+      type: 'INT',
+      nullable: true,
+      default: null,
+      autoIncrement: false,
+      pk: false,
+      dropped: false,
+      ...overrides,
+    };
+  }
+
+  it('returns empty array when nothing changed', () => {
+    const cur: AlterTableColumn[] = [{ ...base, originalName: 'email', dropped: false }];
+    expect(buildAlterTableSql('mysql', null, 't', cur, [base])).toEqual([]);
+  });
+
+  it('MySQL: ADD COLUMN', () => {
+    const newCol = col({ originalName: null, name: 'age', type: 'INT', nullable: true });
+    const stmts = buildAlterTableSql('mysql', null, 'users', [newCol], []);
+    expect(stmts).toHaveLength(1);
+    expect(stmts[0]).toContain('ADD COLUMN `age` INT');
+  });
+
+  it('MySQL: DROP COLUMN', () => {
+    const dropped = col({ originalName: 'email', name: 'email', type: 'VARCHAR(255)', nullable: false, dropped: true });
+    const stmts = buildAlterTableSql('mysql', null, 'users', [dropped], [base]);
+    expect(stmts).toHaveLength(1);
+    expect(stmts[0]).toContain('DROP COLUMN `email`');
+  });
+
+  it('MySQL: CHANGE COLUMN on rename', () => {
+    const renamed = col({ originalName: 'email', name: 'mail', type: 'VARCHAR(255)', nullable: false });
+    const stmts = buildAlterTableSql('mysql', null, 'users', [renamed], [base]);
+    expect(stmts).toHaveLength(1);
+    expect(stmts[0]).toContain('CHANGE COLUMN `email` `mail` VARCHAR(255) NOT NULL');
+  });
+
+  it('MySQL: CHANGE COLUMN on type change', () => {
+    const modified = col({ originalName: 'email', name: 'email', type: 'TEXT', nullable: false });
+    const stmts = buildAlterTableSql('mysql', null, 'users', [modified], [base]);
+    expect(stmts[0]).toContain('CHANGE COLUMN `email` `email` TEXT NOT NULL');
+  });
+
+  it('MySQL: combines multiple clauses in one ALTER TABLE', () => {
+    const dropped = col({ originalName: 'email', name: 'email', type: 'VARCHAR(255)', nullable: false, dropped: true });
+    const added = col({ originalName: null, name: 'phone', type: 'VARCHAR(20)', nullable: true });
+    const stmts = buildAlterTableSql('mysql', null, 'users', [dropped, added], [base]);
+    expect(stmts).toHaveLength(1);
+    expect(stmts[0]).toContain('DROP COLUMN');
+    expect(stmts[0]).toContain('ADD COLUMN');
+  });
+
+  it('MySQL: qualifies table with schema', () => {
+    const modified = col({ originalName: 'email', name: 'mail', type: 'VARCHAR(255)', nullable: false });
+    const stmts = buildAlterTableSql('mysql', 'mydb', 'users', [modified], [base]);
+    expect(stmts[0]).toContain('ALTER TABLE `mydb`.`users`');
+  });
+
+  it('Postgres: ADD COLUMN uses double-quote identifiers', () => {
+    const added = col({ originalName: null, name: 'score', type: 'INTEGER', nullable: true });
+    const stmts = buildAlterTableSql('postgres', null, 'users', [added], []);
+    expect(stmts[0]).toContain('ADD COLUMN "score" INTEGER');
+  });
+
+  it('Postgres: RENAME COLUMN is a separate statement', () => {
+    const pgBase: CreateTableColumn = { ...base };
+    const renamed = col({ originalName: 'email', name: 'mail', type: 'VARCHAR(255)', nullable: false });
+    const stmts = buildAlterTableSql('postgres', null, 'users', [renamed], [pgBase]);
+    expect(stmts).toHaveLength(1);
+    expect(stmts[0]).toMatch(/RENAME COLUMN "email" TO "mail"/);
+  });
+
+  it('Postgres: rename + type change produces two statements', () => {
+    const pgBase: CreateTableColumn = { ...base };
+    const col2 = col({ originalName: 'email', name: 'mail', type: 'TEXT', nullable: false });
+    const stmts = buildAlterTableSql('postgres', null, 'users', [col2], [pgBase]);
+    expect(stmts).toHaveLength(2);
+    expect(stmts[0]).toContain('RENAME COLUMN');
+    expect(stmts[1]).toContain('ALTER COLUMN "mail" TYPE TEXT');
+  });
+
+  it('Postgres: nullable change emits SET NOT NULL / DROP NOT NULL', () => {
+    const pgBase: CreateTableColumn = { ...base, nullable: true };
+    const notNull = col({ originalName: 'email', name: 'email', type: 'VARCHAR(255)', nullable: false });
+    const nullable = col({ originalName: 'email', name: 'email', type: 'VARCHAR(255)', nullable: true });
+
+    const stmts1 = buildAlterTableSql('postgres', null, 't', [notNull], [pgBase]);
+    expect(stmts1[0]).toContain('SET NOT NULL');
+
+    const pgBase2: CreateTableColumn = { ...base, nullable: false };
+    const stmts2 = buildAlterTableSql('postgres', null, 't', [nullable], [pgBase2]);
+    expect(stmts2[0]).toContain('DROP NOT NULL');
+  });
+
+  it('Postgres: default change emits SET DEFAULT / DROP DEFAULT', () => {
+    const pgBase: CreateTableColumn = { ...base, default: null };
+    const withDefault = col({ originalName: 'email', name: 'email', type: 'VARCHAR(255)', nullable: false, default: "'anon'" });
+    const stmts = buildAlterTableSql('postgres', null, 't', [withDefault], [pgBase]);
+    expect(stmts[0]).toContain("SET DEFAULT 'anon'");
+
+    const pgBase2: CreateTableColumn = { ...base, default: "'anon'" };
+    const noDefault = col({ originalName: 'email', name: 'email', type: 'VARCHAR(255)', nullable: false, default: null });
+    const stmts2 = buildAlterTableSql('postgres', null, 't', [noDefault], [pgBase2]);
+    expect(stmts2[0]).toContain('DROP DEFAULT');
   });
 });

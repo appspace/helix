@@ -194,6 +194,13 @@ export const api = {
     });
   },
 
+  alterTable(sql: string) {
+    return request<{ ok: boolean; sql: string }>('/api/alter-table', {
+      method: 'POST',
+      body: JSON.stringify({ sql }),
+    });
+  },
+
   mcpStatus() {
     return request<{ connected: boolean; writesAllowed: boolean; mcpUrl: string }>('/api/mcp/status');
   },
