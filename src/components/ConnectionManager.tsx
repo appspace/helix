@@ -204,7 +204,16 @@ export function ConnectionManager({ onConnect, isConnecting, error, t }: Connect
     if (entry.savePassword && electronAPI) {
       electronAPI.passwords.load(entry.name).then(pw => {
         if (pw === null) return;
-        setForm(p => p.name === entry.name && p.password === '' ? { ...p, password: pw, connectionString: buildUri({ ...p, password: pw }) } : p);
+        // Inject the keychain password into the form, but DON'T rebuild
+        // `connectionString` here. For mongo URI-mode connections that's
+        // load-bearing: the saved URI may have `mongodb+srv://` and a query
+        // string (e.g. `?retryWrites=true&w=majority`), and `buildUri` would
+        // strip both — leaving Atlas connections unable to resolve their SRV
+        // records. The dual-input's `displayUri` already re-renders
+        // dynamically from `form.password` when fields-mode is active, so
+        // we don't need to mirror it into `connectionString` to keep the
+        // URI box in sync.
+        setForm(p => p.name === entry.name && p.password === '' ? { ...p, password: pw } : p);
       }).catch(() => {});
     }
   };
