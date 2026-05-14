@@ -15,6 +15,7 @@ interface SchemaBrowserProps {
   onDropTable?: (schema: string, table: string) => Promise<void>;
   onCreateTable?: () => void;
   onAlterTable?: (schema: string, table: string) => void;
+  loading?: boolean;
   t: Theme;
 }
 
@@ -84,7 +85,7 @@ function readStoredWidth(): number {
   }
 }
 
-export function SchemaBrowser({ schema, activeTable, onTableSelect, onSchemaChange, schemas, activeSchema, onDropTable, onCreateTable, onAlterTable, t }: SchemaBrowserProps) {
+export function SchemaBrowser({ schema, activeTable, onTableSelect, onSchemaChange, schemas, activeSchema, loading, onDropTable, onCreateTable, onAlterTable, t }: SchemaBrowserProps) {
   const [expanded, setExpanded] = useState({ tables: true, views: false, procedures: false, triggers: false });
   const [expandedTables, setExpandedTables] = useState<Record<string, boolean>>({});
   const [filter, setFilter] = useState('');
@@ -218,7 +219,16 @@ export function SchemaBrowser({ schema, activeTable, onTableSelect, onSchemaChan
       </div>
 
       <div style={s.tree}>
-        {groups.map(g => (
+        {loading && (
+          // Replace the tree entirely (rather than overlay) so the user can't
+          // race-click into a stale empty list while inference is in flight —
+          // MongoDB collection-field sampling can take several seconds.
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', fontSize: 11, color: t.textMuted }}>
+            <div style={{ width: 11, height: 11, border: `2px solid ${t.borderSubtle}`, borderTop: `2px solid ${t.accent}`, borderRadius: '50%', animation: 'spin 0.8s linear infinite', flexShrink: 0 }}/>
+            <span>Loading schema…</span>
+          </div>
+        )}
+        {!loading && groups.map(g => (
           <div key={g.key}>
             <div style={s.groupRow} onClick={() => toggle(g.key)}>
               <Chevron open={expanded[g.key]} color={t.textMuted}/>

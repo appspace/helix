@@ -82,6 +82,7 @@ export default function App() {
   const [schemas, setSchemas] = useState<string[]>([]);
   const [activeSchema, setActiveSchema] = useState('');
   const [schemaData, setSchemaData] = useState<SchemaData>(EMPTY_SCHEMA);
+  const [loadingSchema, setLoadingSchema] = useState(false);
 
   const [tabs, setTabs] = useState<Tab[]>([
     { id: '1', name: 'query_1.sql', query: '' },
@@ -104,11 +105,14 @@ export default function App() {
   }, []);
 
   const loadSchema = useCallback(async (schema: string) => {
+    setLoadingSchema(true);
     try {
       const data = await api.schema(schema);
       setSchemaData(data);
     } catch {
       setSchemaData(EMPTY_SCHEMA);
+    } finally {
+      setLoadingSchema(false);
     }
   }, []);
 
@@ -520,6 +524,7 @@ export default function App() {
           onSchemaChange={handleSchemaChange}
           schemas={schemas}
           activeSchema={activeSchema}
+          loading={loadingSchema}
           onDropTable={handleDropTable}
           onCreateTable={queryMode === 'sql' ? () => setShowCreateTable(true) : undefined}
           onAlterTable={queryMode === 'sql' ? handleOpenAlterTable : undefined}
