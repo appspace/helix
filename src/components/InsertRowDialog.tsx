@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import type { CSSProperties } from 'react';
 import type { Theme } from '../theme';
 import type { SchemaColumn } from '../api';
-import { parseEnumValues } from '../lib/sql';
+import { buildInsertSql, parseEnumValues } from '../lib/sql';
 
 type CellValue = string | number | boolean | null;
 type EditKind = 'boolean' | 'number' | 'date' | 'datetime' | 'time' | 'text';
@@ -56,6 +56,7 @@ export function InsertRowDialog({ table, columns, onSubmit, onClose, t }: Insert
   }, [editable]);
 
   const [drafts, setDrafts] = useState<Record<string, string>>(initialDrafts);
+  const [view, setView] = useState<'form' | 'confirm'>('form');
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -89,18 +90,28 @@ export function InsertRowDialog({ table, columns, onSubmit, onClose, t }: Insert
     return { values, missing };
   };
 
-  const submit = async () => {
-    const { values, missing } = buildPayload();
+  const { values: pendingValues, missing: missingRequired } = view === 'confirm'
+    ? buildPayload()
+    : { values: {} as Record<string, CellValue>, missing: [] as string[] };
+
+  const goToConfirm = () => {
+    const { missing } = buildPayload();
     if (missing.length > 0) {
       setError(`Required column${missing.length > 1 ? 's' : ''}: ${missing.join(', ')}`);
       return;
     }
+    setError(null);
+    setView('confirm');
+  };
+
+  const submit = async () => {
     setSaving(true);
     setError(null);
     try {
-      await onSubmit(values);
+      await onSubmit(pendingValues);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      setView('form');
     } finally {
       setSaving(false);
     }
@@ -120,9 +131,12 @@ export function InsertRowDialog({ table, columns, onSubmit, onClose, t }: Insert
     helper: { fontSize: 10, color: t.textMuted, marginTop: 3, lineHeight: 1.35 } as CSSProperties,
     footer: { padding: '12px 16px', borderTop: `1px solid ${t.borderSubtle}`, display: 'flex', justifyContent: 'flex-end', gap: 8, alignItems: 'center' } as CSSProperties,
     errorBanner: { padding: '8px 10px', background: t.colorErrorBg, border: `1px solid ${t.colorErrorBorder}`, borderRadius: 4, fontSize: 11, color: t.colorError, fontFamily: 'monospace', margin: '0 16px' } as CSSProperties,
+    pre: { margin: '0 16px', padding: '10px 12px', background: t.bgBase, border: `1px solid ${t.borderSubtle}`, borderRadius: 4, fontSize: 11, fontFamily: '"JetBrains Mono", monospace', color: t.textPrimary, whiteSpace: 'pre-wrap', wordBreak: 'break-all' } as CSSProperties,
     btnPrimary: { padding: '6px 14px', fontSize: 12, fontFamily: 'inherit', background: t.accent, color: '#fff', border: 'none', borderRadius: 4, cursor: saving ? 'wait' : 'pointer', opacity: saving ? 0.7 : 1 } as CSSProperties,
     btnSecondary: { padding: '6px 14px', fontSize: 12, fontFamily: 'inherit', background: 'transparent', color: t.textSecondary, border: `1px solid ${t.border}`, borderRadius: 4, cursor: saving ? 'not-allowed' : 'pointer' } as CSSProperties,
   };
+
+  const previewSql = (): string => buildInsertSql(table, pendingValues);
 
   return (
     <div style={s.overlay} onClick={() => !saving && onClose()}>
@@ -132,89 +146,109 @@ export function InsertRowDialog({ table, columns, onSubmit, onClose, t }: Insert
           <span style={s.subtitle}>{table}</span>
         </div>
 
-        <div style={s.body}>
-          {editable.length === 0 && (
-            <div style={{ fontSize: 12, color: t.textMuted }}>
-              This table has no user-editable columns (all auto-generated).
-            </div>
-          )}
-          {editable.map(col => {
-            const kind = editKindForColumn(col);
-            const enumValues = col.dataType === 'enum' ? parseEnumValues(col.type) : null;
-            const inputType = kind === 'number' ? 'number'
-              : kind === 'date' ? 'date'
-              : kind === 'datetime' ? 'datetime-local'
-              : kind === 'time' ? 'time'
-              : 'text';
-            const required = !col.nullable && col.default === null;
-            const hasBlankOption = col.default !== null || col.nullable;
-            const blankLabel = col.default !== null ? `default: ${col.default}`
-              : col.nullable ? 'NULL'
-              : '';
-            return (
-              <div key={col.name} style={s.row}>
-                <div>
-                  <div style={s.label} title={col.comment || undefined}>
-                    {col.name}
-                    {required && <span style={{ color: t.colorError, marginLeft: 3 }}>*</span>}
-                  </div>
-                  <div style={s.labelMuted}>{col.type}{col.pk ? ' · PK' : ''}</div>
+        {view === 'form' && (
+          <>
+            <div style={s.body}>
+              {editable.length === 0 && (
+                <div style={{ fontSize: 12, color: t.textMuted }}>
+                  This table has no user-editable columns (all auto-generated).
                 </div>
-                <div>
-                  {kind === 'boolean' ? (
-                    <select
-                      value={drafts[col.name] ?? ''}
-                      onChange={(e) => setDrafts(p => ({ ...p, [col.name]: e.target.value }))}
-                      style={s.input}
-                    >
-                      {hasBlankOption && (
-                        <option value="">{blankLabel}</option>
-                      )}
-                      <option value="true">true</option>
-                      <option value="false">false</option>
-                    </select>
-                  ) : enumValues ? (
-                    <select
-                      value={drafts[col.name] ?? ''}
-                      onChange={(e) => setDrafts(p => ({ ...p, [col.name]: e.target.value }))}
-                      style={s.input}
-                    >
-                      {hasBlankOption ? (
-                        <option value="">{blankLabel}</option>
+              )}
+              {editable.map(col => {
+                const kind = editKindForColumn(col);
+                const enumValues = col.dataType === 'enum' ? parseEnumValues(col.type) : null;
+                const inputType = kind === 'number' ? 'number'
+                  : kind === 'date' ? 'date'
+                  : kind === 'datetime' ? 'datetime-local'
+                  : kind === 'time' ? 'time'
+                  : 'text';
+                const required = !col.nullable && col.default === null;
+                const hasBlankOption = col.default !== null || col.nullable;
+                const blankLabel = col.default !== null ? `default: ${col.default}`
+                  : col.nullable ? 'NULL'
+                  : '';
+                return (
+                  <div key={col.name} style={s.row}>
+                    <div>
+                      <div style={s.label} title={col.comment || undefined}>
+                        {col.name}
+                        {required && <span style={{ color: t.colorError, marginLeft: 3 }}>*</span>}
+                      </div>
+                      <div style={s.labelMuted}>{col.type}{col.pk ? ' · PK' : ''}</div>
+                    </div>
+                    <div>
+                      {kind === 'boolean' ? (
+                        <select
+                          value={drafts[col.name] ?? ''}
+                          onChange={(e) => setDrafts(p => ({ ...p, [col.name]: e.target.value }))}
+                          style={s.input}
+                        >
+                          {hasBlankOption && (
+                            <option value="">{blankLabel}</option>
+                          )}
+                          <option value="true">true</option>
+                          <option value="false">false</option>
+                        </select>
+                      ) : enumValues ? (
+                        <select
+                          value={drafts[col.name] ?? ''}
+                          onChange={(e) => setDrafts(p => ({ ...p, [col.name]: e.target.value }))}
+                          style={s.input}
+                        >
+                          {hasBlankOption ? (
+                            <option value="">{blankLabel}</option>
+                          ) : (
+                            // Disabled placeholder keeps the visible state aligned with the
+                            // empty draft, so the browser doesn't silently surface the first
+                            // enum value while still routing through the "Required column"
+                            // validator if the user hits Review SQL without picking.
+                            <option value="" disabled>— select —</option>
+                          )}
+                          {enumValues.map(v => <option key={v} value={v}>{v}</option>)}
+                        </select>
                       ) : (
-                        // Disabled placeholder keeps the visible state aligned with the
-                        // empty draft, so the browser doesn't silently surface the first
-                        // enum value while still routing through the "Required column"
-                        // validator if the user hits Insert without picking.
-                        <option value="" disabled>— select —</option>
+                        <input
+                          type={inputType}
+                          value={drafts[col.name] ?? ''}
+                          step={kind === 'number' ? 'any' : undefined}
+                          onChange={(e) => setDrafts(p => ({ ...p, [col.name]: e.target.value }))}
+                          placeholder={blankLabel}
+                          style={s.input}
+                        />
                       )}
-                      {enumValues.map(v => <option key={v} value={v}>{v}</option>)}
-                    </select>
-                  ) : (
-                    <input
-                      type={inputType}
-                      value={drafts[col.name] ?? ''}
-                      step={kind === 'number' ? 'any' : undefined}
-                      onChange={(e) => setDrafts(p => ({ ...p, [col.name]: e.target.value }))}
-                      placeholder={blankLabel}
-                      style={s.input}
-                    />
-                  )}
-                  {col.comment && <div style={s.helper}>{col.comment}</div>}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+                      {col.comment && <div style={s.helper}>{col.comment}</div>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
 
-        {error && <div style={s.errorBanner}>{error}</div>}
+            {error && <div style={s.errorBanner}>{error}</div>}
 
-        <div style={s.footer}>
-          <button onClick={onClose} style={s.btnSecondary} disabled={saving}>Cancel</button>
-          <button onClick={submit} style={s.btnPrimary} disabled={editable.length === 0 || saving}>
-            {saving ? 'Inserting…' : 'Insert'}
-          </button>
-        </div>
+            <div style={s.footer}>
+              <button onClick={onClose} style={s.btnSecondary}>Cancel</button>
+              <button onClick={goToConfirm} style={s.btnPrimary} disabled={editable.length === 0}>Review SQL</button>
+            </div>
+          </>
+        )}
+
+        {view === 'confirm' && (
+          <>
+            <div style={{ padding: '12px 16px 4px', fontSize: 12, color: t.textSecondary }}>This will run:</div>
+            <pre style={s.pre}>{previewSql()}</pre>
+            {missingRequired.length > 0 && (
+              <div style={s.errorBanner}>Required columns missing: {missingRequired.join(', ')}</div>
+            )}
+            {error && <div style={s.errorBanner}>{error}</div>}
+
+            <div style={s.footer}>
+              <button onClick={() => { setView('form'); setError(null); }} style={s.btnSecondary} disabled={saving}>Back</button>
+              <button onClick={submit} style={s.btnPrimary} disabled={saving || missingRequired.length > 0}>
+                {saving ? 'Inserting…' : 'Insert'}
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
