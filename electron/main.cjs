@@ -3,14 +3,20 @@
 const { app, BrowserWindow, Tray, Menu, nativeImage, utilityProcess, dialog, ipcMain, safeStorage, powerMonitor } = require('electron');
 const path = require('path');
 const http = require('http');
+const net = require('net');
 const fs = require('fs');
 
 const isDev = !app.isPackaged;
-const PORT = 3001;
+// In dev the server is started by `npm run dev:server` outside this process,
+// and is hardcoded to 3001. In production we pick a free port at startup so
+// a leftover dev server (or any other listener) can't shadow us — the prior
+// behaviour silently failed to bind, leaving the BrowserWindow to load
+// whatever happened to be answering on 3001 (often "Cannot GET /").
+let PORT = 3001;
+let APP_URL = `http://localhost:${PORT}`;
 
 app.setName('Helix');
 const VITE_URL = 'http://localhost:5173';
-const APP_URL = `http://localhost:${PORT}`;
 const ERR_CONNECTION_REFUSED = -102;
 
 // 1×1 transparent PNG — tray fallback when no icon file is present
@@ -23,7 +29,29 @@ let serverProc = null;
 
 // ── Server ────────────────────────────────────────────────────────────────────
 
-function startServer() {
+// Ask the OS for a port nobody's listening on. There's a small race window
+// between close-and-fork where another process could grab it, but in practice
+// it's many orders of magnitude better than hardcoding 3001 and silently
+// losing to a leftover listener.
+function findFreePort() {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.unref();
+    srv.on('error', reject);
+    srv.listen(0, '127.0.0.1', () => {
+      const { port } = srv.address();
+      srv.close(() => resolve(port));
+    });
+  });
+}
+
+// Fork the bundled server, wait until it answers, and reject loudly if it
+// dies on the way up. Captures stderr so the error dialog can surface the
+// real cause instead of a generic timeout.
+async function startServer() {
+  PORT = await findFreePort();
+  APP_URL = `http://localhost:${PORT}`;
+
   const serverScript = path.join(__dirname, 'server.cjs');
   const staticPath = path.join(process.resourcesPath, 'dist');
 
@@ -32,21 +60,34 @@ function startServer() {
     stdio: 'pipe',
   });
 
+  let stderrBuf = '';
+  let exited = false;
   serverProc.stdout?.on('data', (d) => console.log('[server]', String(d).trim()));
-  serverProc.stderr?.on('data', (d) => console.error('[server]', String(d).trim()));
-}
+  serverProc.stderr?.on('data', (d) => {
+    const s = String(d);
+    stderrBuf += s;
+    console.error('[server]', s.trim());
+  });
 
-function waitForServer(maxAttempts = 50) {
   return new Promise((resolve, reject) => {
+    serverProc.on('exit', (code) => {
+      exited = true;
+      // A clean exit before we've finished readiness probing is still a
+      // failure — there's no surviving server for the renderer to talk to.
+      reject(new Error(stderrBuf.trim() || `Server exited with code ${code}`));
+    });
+
+    const maxAttempts = 50;
     let attempts = 0;
     const attempt = () => {
+      if (exited) return;
       if (attempts >= maxAttempts) {
-        reject(new Error(`Server did not start after ${maxAttempts} attempts`));
+        reject(new Error(stderrBuf.trim() || `Server did not respond after ${maxAttempts} attempts`));
         return;
       }
       attempts++;
       http
-        .get(`${APP_URL}/api/connect/status`, resolve)
+        .get(`${APP_URL}/api/connect/status`, () => resolve())
         .on('error', () => setTimeout(attempt, 300));
     };
     attempt();
@@ -195,13 +236,20 @@ app.whenReady().then(async () => {
   }
 
   if (!isDev) {
-    startServer();
-    const started = await waitForServer().catch((err) => {
-      dialog.showErrorBox('Helix failed to start', err.message);
+    try {
+      await startServer();
+    } catch (err) {
+      // Show the underlying cause (captured stderr) so a user installing the
+      // DMG can tell whether it's e.g. EADDRINUSE from a leftover dev server
+      // vs. some other crash. Without this they'd see a blank "Cannot GET /"
+      // page with no context.
+      dialog.showErrorBox(
+        "Helix can't start",
+        `The bundled server failed to launch.\n\n${err.message || err}`,
+      );
       app.quit();
-      return false;
-    });
-    if (started === false) return;
+      return;
+    }
   }
   createWindow();
   createTray();
