@@ -1,5 +1,6 @@
 import type { RequestHandler } from 'express';
 import { getDriver } from '../db.js';
+import { DriverError } from '../drivers/interface.js';
 
 export const postQuery: RequestHandler = async (req, res) => {
   const driver = getDriver();
@@ -72,10 +73,12 @@ export const postQuery: RequestHandler = async (req, res) => {
       executionTime,
     });
   } catch (err) {
-    // All driver errors map to 400 today — lossy for transient/infra failures
-    // (e.g. MongoServerSelectionError, MongoNetworkError, connection drops).
-    // See #122 for the proposed classification (client / transient / server).
     const message = err instanceof Error ? err.message : String(err);
-    res.status(400).json({ error: message });
+    let status = 500;
+    if (err instanceof DriverError) {
+      if (err.errorClass === 'client') status = 400;
+      else if (err.errorClass === 'transient') status = 503;
+    }
+    res.status(status).json({ error: message });
   }
 };

@@ -62,10 +62,14 @@ const { ObjectIdCtor } = vi.hoisted(() => {
 vi.mock('mongodb', () => ({
   MongoClient: vi.fn(() => mockClient),
   ObjectId: ObjectIdCtor,
+  MongoNetworkError: class MongoNetworkError extends Error { constructor(msg: string) { super(msg); this.name = 'MongoNetworkError'; } },
+  MongoServerSelectionError: class MongoServerSelectionError extends Error { constructor(msg: string) { super(msg); this.name = 'MongoServerSelectionError'; } },
+  MongoParseError: class MongoParseError extends Error { constructor(msg: string) { super(msg); this.name = 'MongoParseError'; } },
 }));
 
 import { MongoDBDriver } from './mongodb.js';
-import { MongoClient } from 'mongodb';
+import { MongoClient, MongoNetworkError, MongoServerSelectionError, MongoParseError } from 'mongodb';
+import { DriverError } from './interface.js';
 
 function makeDriver(database?: string) {
   return new MongoDBDriver({
@@ -773,5 +777,69 @@ describe('MongoDBDriver – getTableDdl', () => {
     await expect(
       makeDriver().getTableDdl('shop', 'users', 'table'),
     ).rejects.toThrow(/getCollectionInfo/);
+  });
+});
+
+describe('MongoDBDriver – error classification', () => {
+  it('classifies MongoServerSelectionError as transient', async () => {
+    mockCursor.toArray.mockRejectedValueOnce(new MongoServerSelectionError('Server selection timed out'));
+    const req = JSON.stringify({ collection: 'users', operation: 'find' });
+    await expect(makeDriver().query(req)).rejects.toMatchObject({
+      errorClass: 'transient',
+      message: 'Server selection timed out',
+    });
+  });
+
+  it('classifies MongoNetworkError as transient', async () => {
+    mockCursor.toArray.mockRejectedValueOnce(new MongoNetworkError('socket closed'));
+    const req = JSON.stringify({ collection: 'users', operation: 'find' });
+    await expect(makeDriver().query(req)).rejects.toMatchObject({
+      errorClass: 'transient',
+    });
+  });
+
+  it('classifies MongoParseError as client', async () => {
+    mockCursor.toArray.mockRejectedValueOnce(new MongoParseError('invalid query'));
+    const req = JSON.stringify({ collection: 'users', operation: 'find' });
+    await expect(makeDriver().query(req)).rejects.toMatchObject({
+      errorClass: 'client',
+    });
+  });
+
+  it('classifies an unrecognized error as server', async () => {
+    mockCursor.toArray.mockRejectedValueOnce(new Error('unexpected internal failure'));
+    const req = JSON.stringify({ collection: 'users', operation: 'find' });
+    await expect(makeDriver().query(req)).rejects.toMatchObject({
+      errorClass: 'server',
+    });
+  });
+
+  it('classifies invalid MQL JSON as a client DriverError', async () => {
+    await expect(makeDriver().query('not-json')).rejects.toMatchObject({
+      errorClass: 'client',
+    });
+  });
+
+  it('classifies missing collection field as a client DriverError', async () => {
+    await expect(makeDriver().query(JSON.stringify({ operation: 'find' }))).rejects.toMatchObject({
+      errorClass: 'client',
+    });
+  });
+
+  it('classifies unsupported operation as a client DriverError', async () => {
+    await expect(
+      makeDriver().query(JSON.stringify({ collection: 'users', operation: 'bulkWrite' })),
+    ).rejects.toMatchObject({
+      errorClass: 'client',
+      message: expect.stringContaining('Unsupported MQL operation'),
+    });
+  });
+
+  it('re-throws DriverError instances without double-wrapping', async () => {
+    const original = new DriverError('already classified', 'transient');
+    mockCursor.toArray.mockRejectedValueOnce(original);
+    const req = JSON.stringify({ collection: 'users', operation: 'find' });
+    const thrown = await makeDriver().query(req).catch(e => e);
+    expect(thrown).toBe(original);
   });
 });

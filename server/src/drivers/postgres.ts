@@ -1,4 +1,5 @@
 import pg from 'pg';
+import { DriverError } from './interface.js';
 import type { DbDriver, ConnectionConfig, QueryResult, ColumnMeta, ColumnInfo, SchemaInfo, TableInfo } from './interface.js';
 
 // Return DATE / TIME / TIMESTAMP / TIMESTAMPTZ / TIMETZ as raw strings rather
@@ -17,6 +18,22 @@ const PG_TIMETZ = 1266;
 const identity = (v: string) => v;
 for (const oid of [PG_DATE, PG_TIME, PG_TIMESTAMP, PG_TIMESTAMPTZ, PG_TIMETZ]) {
   pg.types.setTypeParser(oid, identity);
+}
+
+function classifyPgError(err: unknown): DriverError {
+  const message = err instanceof Error ? err.message : String(err);
+  if (err && typeof (err as Record<string, unknown>).code === 'string') {
+    const code = (err as Record<string, unknown>).code as string;
+    // 08xxx=connection, 53xxx=insufficient resources, 57xxx=operator intervention
+    if (code.startsWith('08') || code.startsWith('53') || code.startsWith('57')) {
+      return new DriverError(message, 'transient', { cause: err });
+    }
+    // 42xxx=syntax/access errors, 28xxx=invalid authorization
+    if (code.startsWith('42') || code.startsWith('28')) {
+      return new DriverError(message, 'client', { cause: err });
+    }
+  }
+  return new DriverError(message, 'server', { cause: err });
 }
 
 function buildPgPoolConfig(config: ConnectionConfig): pg.PoolConfig {
@@ -126,56 +143,66 @@ export class PostgresDriver implements DbDriver {
   }
 
   async query(sql: string, params?: unknown[], schema?: string): Promise<QueryResult> {
-    const client = await this.pool.connect();
-    let searchPathSet = false;
     try {
-      if (schema) {
-        await client.query(`SET search_path TO ${this.escapeIdent(schema)}`);
-        searchPathSet = true;
-      }
+      const client = await this.pool.connect();
+      let searchPathSet = false;
+      try {
+        if (schema) {
+          await client.query(`SET search_path TO ${this.escapeIdent(schema)}`);
+          searchPathSet = true;
+        }
 
-      // Naive ?→$N rewrite: assumes machine-generated SQL when params is non-empty.
-      // User-authored SQL must be passed without params (the rewrite is skipped then).
-      let pgSql = sql;
-      if (params?.length) {
-        let n = 0;
-        pgSql = sql.replace(/\?/g, () => `$${++n}`);
+        // Naive ?→$N rewrite: assumes machine-generated SQL when params is non-empty.
+        // User-authored SQL must be passed without params (the rewrite is skipped then).
+        let pgSql = sql;
+        if (params?.length) {
+          let n = 0;
+          pgSql = sql.replace(/\?/g, () => `$${++n}`);
+        }
+        const result = await client.query({ text: pgSql, values: params?.length ? params : undefined });
+        // node-pg's simple query protocol returns an array of results when the SQL
+        // contains multiple statements. `query()` keeps the legacy single-result
+        // contract — `queryAll` is the multi-statement entry point — so collapse
+        // an unexpected array down to its last element.
+        const single = Array.isArray(result) ? (result as pg.QueryResult[])[result.length - 1] : result;
+        return buildPgResult(single);
+      } finally {
+        // pg.Pool reuses clients without resetting session state, so search_path
+        // would leak to the next caller on this same client.
+        if (searchPathSet) {
+          try { await client.query('SET search_path TO DEFAULT'); } catch { /* fall through to release */ }
+        }
+        client.release();
       }
-      const result = await client.query({ text: pgSql, values: params?.length ? params : undefined });
-      // node-pg's simple query protocol returns an array of results when the SQL
-      // contains multiple statements. `query()` keeps the legacy single-result
-      // contract — `queryAll` is the multi-statement entry point — so collapse
-      // an unexpected array down to its last element.
-      const single = Array.isArray(result) ? (result as pg.QueryResult[])[result.length - 1] : result;
-      return buildPgResult(single);
-    } finally {
-      // pg.Pool reuses clients without resetting session state, so search_path
-      // would leak to the next caller on this same client.
-      if (searchPathSet) {
-        try { await client.query('SET search_path TO DEFAULT'); } catch { /* fall through to release */ }
-      }
-      client.release();
+    } catch (err) {
+      if (err instanceof DriverError) throw err;
+      throw classifyPgError(err);
     }
   }
 
   async queryAll(sql: string, schema?: string): Promise<QueryResult[]> {
-    const client = await this.pool.connect();
-    let searchPathSet = false;
     try {
-      if (schema) {
-        await client.query(`SET search_path TO ${this.escapeIdent(schema)}`);
-        searchPathSet = true;
+      const client = await this.pool.connect();
+      let searchPathSet = false;
+      try {
+        if (schema) {
+          await client.query(`SET search_path TO ${this.escapeIdent(schema)}`);
+          searchPathSet = true;
+        }
+        // Always go through the simple query protocol (no values) so multi-statement
+        // SQL fans out to one result per statement.
+        const raw = await client.query(sql);
+        const results = Array.isArray(raw) ? (raw as pg.QueryResult[]) : [raw];
+        return results.map(buildPgResult);
+      } finally {
+        if (searchPathSet) {
+          try { await client.query('SET search_path TO DEFAULT'); } catch { /* fall through to release */ }
+        }
+        client.release();
       }
-      // Always go through the simple query protocol (no values) so multi-statement
-      // SQL fans out to one result per statement.
-      const raw = await client.query(sql);
-      const results = Array.isArray(raw) ? (raw as pg.QueryResult[]) : [raw];
-      return results.map(buildPgResult);
-    } finally {
-      if (searchPathSet) {
-        try { await client.query('SET search_path TO DEFAULT'); } catch { /* fall through to release */ }
-      }
-      client.release();
+    } catch (err) {
+      if (err instanceof DriverError) throw err;
+      throw classifyPgError(err);
     }
   }
 

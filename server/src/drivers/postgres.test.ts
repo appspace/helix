@@ -22,6 +22,7 @@ vi.mock('pg', () => ({
 }));
 
 import { PostgresDriver } from './postgres.js';
+import { DriverError } from './interface.js';
 
 // Snapshot module-load `setTypeParser` calls before any `vi.clearAllMocks()`
 // in later `beforeEach` blocks wipes them.
@@ -75,6 +76,62 @@ describe('PostgresDriver.query – connection release', () => {
     const calls = mockClient.query.mock.calls.map(c => (typeof c[0] === 'string' ? c[0] : c[0].text));
     expect(calls).toContain('SET search_path TO DEFAULT');
     expect(mockClient.release).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('PostgresDriver.query – error classification', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockPoolInstance.connect.mockResolvedValue(mockClient);
+  });
+
+  function pgError(message: string, code: string): Error {
+    const err = new Error(message);
+    (err as Record<string, unknown>).code = code;
+    return err;
+  }
+
+  it('wraps a syntax error (42xxx) as a client DriverError', async () => {
+    mockClient.query.mockRejectedValueOnce(pgError('syntax error at or near "SELEC"', '42601'));
+    await expect(makeDriver().query('SELEC 1')).rejects.toMatchObject({
+      errorClass: 'client',
+      message: 'syntax error at or near "SELEC"',
+    });
+  });
+
+  it('wraps a connection error (08xxx) as a transient DriverError', async () => {
+    mockClient.query.mockRejectedValueOnce(pgError('connection refused', '08006'));
+    await expect(makeDriver().query('SELECT 1')).rejects.toMatchObject({
+      errorClass: 'transient',
+    });
+  });
+
+  it('wraps a resource error (53xxx) as a transient DriverError', async () => {
+    mockClient.query.mockRejectedValueOnce(pgError('too many connections', '53300'));
+    await expect(makeDriver().query('SELECT 1')).rejects.toMatchObject({
+      errorClass: 'transient',
+    });
+  });
+
+  it('wraps an operator-intervention error (57xxx) as a transient DriverError', async () => {
+    mockClient.query.mockRejectedValueOnce(pgError('canceling statement due to user request', '57014'));
+    await expect(makeDriver().query('SELECT 1')).rejects.toMatchObject({
+      errorClass: 'transient',
+    });
+  });
+
+  it('wraps an unrecognized pg error as a server DriverError', async () => {
+    mockClient.query.mockRejectedValueOnce(pgError('some internal error', 'XX000'));
+    await expect(makeDriver().query('SELECT 1')).rejects.toMatchObject({
+      errorClass: 'server',
+    });
+  });
+
+  it('re-throws DriverError instances without double-wrapping', async () => {
+    const original = new DriverError('already classified', 'client');
+    mockClient.query.mockRejectedValueOnce(original);
+    const thrown = await makeDriver().query('SELECT 1').catch(e => e);
+    expect(thrown).toBe(original);
   });
 });
 

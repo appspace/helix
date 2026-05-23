@@ -1,3 +1,14 @@
+export type DriverErrorClass = 'client' | 'transient' | 'server';
+
+export class DriverError extends Error {
+  readonly errorClass: DriverErrorClass;
+  constructor(message: string, errorClass: DriverErrorClass, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'DriverError';
+    this.errorClass = errorClass;
+  }
+}
+
 export interface ConnectionConfig {
   host: string;
   port: number;
