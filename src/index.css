@@ -125,6 +125,10 @@ body {
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
 
+/* Tab bar scroll container — overflow scrolling without a visible scrollbar */
+.tabs-scroll { scrollbar-width: none; }
+.tabs-scroll::-webkit-scrollbar { display: none; }
+
 /* Electron window drag region (no-op in browsers) */
 .titlebar-drag { -webkit-app-region: drag; app-region: drag; }
 .titlebar-drag button,
