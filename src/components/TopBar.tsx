@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import type { Theme, ThemeName } from '../theme';
 
@@ -37,6 +37,9 @@ export function TopBar({ tabs, activeTab, onTabChange, onNewTab, onCloseTab, con
   const canDisconnect = connectionStatus === 'connected' && !!onDisconnect;
   const isConnected = connectionStatus === 'connected';
 
+  const tabsScrollRef = useRef<HTMLDivElement>(null);
+  const activeTabRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     if (!menuOpen) return;
     const close = () => setMenuOpen(false);
@@ -48,6 +51,26 @@ export function TopBar({ tabs, activeTab, onTabChange, onNewTab, onCloseTab, con
       window.removeEventListener('keydown', key);
     };
   }, [menuOpen]);
+
+  // Bring the active tab into view when it changes or when tabs are added/removed.
+  useEffect(() => {
+    activeTabRef.current?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+  }, [activeTab, tabs.length]);
+
+  // Translate vertical wheel into horizontal scroll so mouse-wheel users can
+  // reach overflowed tabs. Attach manually so we can preventDefault.
+  useEffect(() => {
+    const el = tabsScrollRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (e.deltaY !== 0 && Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+        e.preventDefault();
+        el.scrollLeft += e.deltaY;
+      }
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
   const root: CSSProperties = {
     height: 40, background: t.bgToolbar, borderBottom: `1px solid ${t.border}`,
     display: 'flex', alignItems: 'center', flexShrink: 0,
@@ -58,7 +81,8 @@ export function TopBar({ tabs, activeTab, onTabChange, onNewTab, onCloseTab, con
         width: 48, display: 'flex', alignItems: 'center', justifyContent: 'center',
         borderRight: `1px solid ${t.borderSubtle}`, alignSelf: 'stretch', flexShrink: 0,
       };
-  const tabsWrap: CSSProperties = { display: 'flex', alignItems: 'stretch', flex: 1, overflow: 'hidden', alignSelf: 'stretch' };
+  const tabsWrap: CSSProperties = { display: 'flex', alignItems: 'stretch', flex: 1, minWidth: 0, overflow: 'hidden', alignSelf: 'stretch' };
+  const tabsScroll: CSSProperties = { display: 'flex', alignItems: 'stretch', flex: 1, minWidth: 0, overflowX: 'auto', overflowY: 'hidden', alignSelf: 'stretch' };
   const tabBase: CSSProperties = {
     display: 'flex', alignItems: 'center', gap: 6, padding: '0 10px 0 12px',
     fontSize: 12, color: t.textMuted, cursor: 'pointer',
@@ -84,25 +108,33 @@ export function TopBar({ tabs, activeTab, onTabChange, onNewTab, onCloseTab, con
       </div>
 
       <div style={tabsWrap}>
-        {tabs.map(tab => (
-          <div key={tab.id} data-no-drag style={activeTab === tab.id ? tabActive : tabBase} onClick={() => onTabChange(tab.id)}>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={activeTab === tab.id ? t.accent : t.textMuted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>
-            </svg>
-            <span style={{ maxWidth: 100, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tab.name}</span>
-            {tab.modified && <span style={{ width: 5, height: 5, borderRadius: '50%', background: t.colorWarning, flexShrink: 0 }}/>}
-            <button
-              style={{ background: 'none', border: 'none', padding: '2px', cursor: 'pointer', color: t.textMuted, display: 'flex', alignItems: 'center', borderRadius: 3, marginLeft: 2 }}
-              onClick={e => { e.stopPropagation(); onCloseTab(tab.id); }}
+        <div ref={tabsScrollRef} className="tabs-scroll" style={tabsScroll} data-no-drag>
+          {tabs.map(tab => (
+            <div
+              key={tab.id}
+              ref={activeTab === tab.id ? activeTabRef : undefined}
+              data-no-drag
+              style={activeTab === tab.id ? tabActive : tabBase}
+              onClick={() => onTabChange(tab.id)}
             >
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={activeTab === tab.id ? t.accent : t.textMuted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>
               </svg>
-            </button>
-          </div>
-        ))}
+              <span style={{ maxWidth: 100, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tab.name}</span>
+              {tab.modified && <span style={{ width: 5, height: 5, borderRadius: '50%', background: t.colorWarning, flexShrink: 0 }}/>}
+              <button
+                style={{ background: 'none', border: 'none', padding: '2px', cursor: 'pointer', color: t.textMuted, display: 'flex', alignItems: 'center', borderRadius: 3, marginLeft: 2 }}
+                onClick={e => { e.stopPropagation(); onCloseTab(tab.id); }}
+              >
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                  <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                </svg>
+              </button>
+            </div>
+          ))}
+        </div>
         <button
-          style={{ background: 'none', border: 'none', padding: '0 10px', cursor: 'pointer', color: t.textMuted, display: 'flex', alignItems: 'center', alignSelf: 'stretch', transition: 'color 150ms ease' }}
+          style={{ background: 'none', border: 'none', padding: '0 10px', cursor: 'pointer', color: t.textMuted, display: 'flex', alignItems: 'center', alignSelf: 'stretch', flexShrink: 0, transition: 'color 150ms ease' }}
           onClick={onNewTab}
           title="New query"
         >
