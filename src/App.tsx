@@ -39,6 +39,17 @@ interface Tab {
   queryError?: string | null;
   execTime?: number | null;
   isRunning?: boolean;
+  // EXPLAIN plan from the most recent Explain action (MySQL only).
+  // `explainPlanNonce` flips whenever a new plan arrives so ResultsTable can
+  // auto-switch to the Plan view even when the parsed JSON is structurally
+  // identical to the previous run.
+  explainPlan?: unknown;
+  /** Verbatim `EXPLAIN FORMAT=JSON ...` statement returned by the server; shown
+   *  in the ExplainPlan footer so the user can see / copy what was run. */
+  explainSql?: string | null;
+  explainError?: string | null;
+  isExplaining?: boolean;
+  explainPlanNonce?: number;
 }
 
 const EMPTY_SCHEMA: SchemaData = { tables: [], views: [], procedures: [], triggers: [] };
@@ -313,7 +324,7 @@ export default function App() {
       }
     }
 
-    updateTab(targetTab, { isRunning: true, results: null, resultSets: undefined, activeResultIndex: 0, queryError: null, execTime: null });
+    updateTab(targetTab, { isRunning: true, results: null, resultSets: undefined, activeResultIndex: 0, queryError: null, execTime: null, explainPlan: null, explainSql: null, explainError: null });
 
     const started = Date.now();
     try {
@@ -352,6 +363,35 @@ export default function App() {
       }
     } finally {
       updateTab(targetTab, { isRunning: false });
+    }
+  };
+
+  const handleExplain = async () => {
+    if (currentTab?.isExplaining || currentTab?.isRunning) return;
+    if (queryMode !== 'sql' || dbType !== 'mysql') return;
+    const text = currentTab?.query?.trim();
+    if (!text) return;
+    const targetTab = activeTab;
+
+    updateTab(targetTab, { isExplaining: true, explainError: null });
+    try {
+      const res = await api.explain(text, activeSchema);
+      updateTab(targetTab, {
+        explainPlan: res.plan ?? null,
+        explainSql: res.explainSql ?? null,
+        explainError: null,
+        explainPlanNonce: Date.now(),
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      updateTab(targetTab, {
+        explainPlan: null,
+        explainSql: null,
+        explainError: message,
+        explainPlanNonce: Date.now(),
+      });
+    } finally {
+      updateTab(targetTab, { isExplaining: false });
     }
   };
 
@@ -538,6 +578,8 @@ export default function App() {
               onChange={handleQueryChange}
               onRun={handleRun}
               isRunning={isRunning}
+              onExplain={queryMode === 'sql' && dbType === 'mysql' ? handleExplain : undefined}
+              isExplaining={currentTab?.isExplaining ?? false}
               queryMode={queryMode}
               activeSchema={activeSchema}
               schemaData={schemaData}
@@ -571,6 +613,11 @@ export default function App() {
             onDeleteRow={handleDeleteRow}
             onUpdateCell={handleUpdateCell}
             onInsertRow={handleInsertRow}
+            explainPlan={currentTab?.explainPlan}
+            explainSql={currentTab?.explainSql ?? null}
+            explainError={currentTab?.explainError ?? null}
+            isExplaining={currentTab?.isExplaining ?? false}
+            explainPlanNonce={currentTab?.explainPlanNonce}
             t={t}
           />
         </div>

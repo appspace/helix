@@ -29,6 +29,9 @@ interface QueryEditorProps {
   onChange: (val: string) => void;
   onRun: () => void;
   isRunning: boolean;
+  /** Hidden when undefined; when provided, an "Explain" action runs the plan visualiser. */
+  onExplain?: () => void;
+  isExplaining?: boolean;
   queryMode?: 'sql' | 'mql';
   activeSchema: string;
   schemaData?: SchemaData;
@@ -73,7 +76,7 @@ const ToolBtn = ({ title, onClick, active, children, t }: { title: string; onCli
 );
 
 export function QueryEditor({
-  value, onChange, onRun, isRunning, queryMode = 'sql', activeSchema, schemaData, runtimeError,
+  value, onChange, onRun, isRunning, onExplain, isExplaining = false, queryMode = 'sql', activeSchema, schemaData, runtimeError,
   history = [], onReopenHistory, onDeleteHistoryEntry, onClearHistory,
   savedQueries = [], onSaveQuery, onDeleteSavedQuery, onRenameSavedQuery, onReopenSavedQuery,
   t,
@@ -293,6 +296,7 @@ export function QueryEditor({
     root: { display: 'flex', flexDirection: 'column', background: t.bgSurface, borderBottom: `1px solid ${t.border}` } as CSSProperties,
     toolbar: { display: 'flex', alignItems: 'center', gap: 2, padding: '5px 10px', borderBottom: `1px solid ${t.border}`, flexShrink: 0, background: t.bgToolbar } as CSSProperties,
     runBtn: { display: 'flex', alignItems: 'center', gap: 6, height: 28, padding: '0 12px', background: t.accent, color: t.textInverse, border: 'none', borderRadius: 5, fontSize: 12, fontWeight: 600, fontFamily: '"IBM Plex Sans", sans-serif', cursor: 'pointer' } as CSSProperties,
+    explainBtn: { display: 'flex', alignItems: 'center', gap: 6, height: 28, padding: '0 10px', background: t.bgElevated, color: t.textPrimary, border: `1px solid ${t.border}`, borderRadius: 5, fontSize: 12, fontWeight: 500, fontFamily: '"IBM Plex Sans", sans-serif', cursor: 'pointer' } as CSSProperties,
     sep: { width: 1, height: 18, background: t.border, margin: '0 4px' } as CSSProperties,
     schemaPill: { display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: t.textSecondary, fontFamily: 'monospace', background: t.bgElevated, border: `1px solid ${t.border}`, padding: '3px 9px', borderRadius: 4 } as CSSProperties,
     editorWrap: { flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 } as CSSProperties,
@@ -320,6 +324,24 @@ export function QueryEditor({
           {isRunning ? 'Stop' : 'Run'}
           <span style={{ fontSize: 10, opacity: 0.65 }}>{RUN_SHORTCUT}</span>
         </button>
+        {onExplain && (
+          <button
+            style={{ ...s.explainBtn, opacity: isExplaining || isRunning ? 0.6 : 1, cursor: isExplaining || isRunning ? 'wait' : 'pointer' }}
+            onClick={() => { if (!isExplaining && !isRunning) onExplain(); }}
+            disabled={isExplaining || isRunning}
+            data-tooltip="Show EXPLAIN plan"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              {/* fork/tree icon: branches from a root */}
+              <circle cx="6" cy="5" r="2"/>
+              <circle cx="18" cy="5" r="2"/>
+              <circle cx="12" cy="19" r="2"/>
+              <path d="M6 7v3a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7"/>
+              <line x1="12" y1="12" x2="12" y2="17"/>
+            </svg>
+            {isExplaining ? 'Explaining…' : 'Explain'}
+          </button>
+        )}
         <div style={s.sep}/>
         <ToolBtn title={`${isMql ? 'Format JSON' : 'Format SQL'} (${FORMAT_SHORTCUT})`} t={t} onClick={handleFormat}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
