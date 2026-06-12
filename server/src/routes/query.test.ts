@@ -8,6 +8,7 @@ vi.mock('../db.js', () => ({
 
 import { getDriver } from '../db.js';
 import { postQuery } from './query.js';
+import { DriverError } from '../drivers/interface.js';
 
 function makeMeta(name: string, { pk = false, unique = false, notNull = false } = {}) {
   return { name, orgName: name, table: 't', orgTable: 't', pk, unique, notNull, mysqlType: 253 };
@@ -112,10 +113,10 @@ describe('postQuery – driver delegation (sql mode)', () => {
     expect(res.body.results[1].rows).toEqual([{ b: 2 }]);
   });
 
-  it('returns 400 when driver.query() throws', async () => {
+  it('returns 400 when driver.query() throws a client DriverError', async () => {
     const mockDriver = {
       queryMode: 'sql' as const,
-      query: vi.fn().mockRejectedValue(new Error("Table 'mydb.ghost' doesn't exist")),
+      query: vi.fn().mockRejectedValue(new DriverError("Table 'mydb.ghost' doesn't exist", 'client')),
     };
     vi.mocked(getDriver).mockReturnValue(mockDriver as any);
 
@@ -125,6 +126,51 @@ describe('postQuery – driver delegation (sql mode)', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('ghost');
+  });
+
+  it('returns 503 when driver.query() throws a transient DriverError', async () => {
+    const mockDriver = {
+      queryMode: 'sql' as const,
+      query: vi.fn().mockRejectedValue(new DriverError('connection refused', 'transient')),
+    };
+    vi.mocked(getDriver).mockReturnValue(mockDriver as any);
+
+    const res = await request(makeApp())
+      .post('/api/query')
+      .send({ sql: 'SELECT 1' });
+
+    expect(res.status).toBe(503);
+    expect(res.body.error).toBe('connection refused');
+  });
+
+  it('returns 500 when driver.query() throws a server DriverError', async () => {
+    const mockDriver = {
+      queryMode: 'sql' as const,
+      query: vi.fn().mockRejectedValue(new DriverError('internal driver error', 'server')),
+    };
+    vi.mocked(getDriver).mockReturnValue(mockDriver as any);
+
+    const res = await request(makeApp())
+      .post('/api/query')
+      .send({ sql: 'SELECT 1' });
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe('internal driver error');
+  });
+
+  it('returns 500 when driver.query() throws an unclassified error', async () => {
+    const mockDriver = {
+      queryMode: 'sql' as const,
+      query: vi.fn().mockRejectedValue(new Error('something unexpected')),
+    };
+    vi.mocked(getDriver).mockReturnValue(mockDriver as any);
+
+    const res = await request(makeApp())
+      .post('/api/query')
+      .send({ sql: 'SELECT 1' });
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe('something unexpected');
   });
 });
 
@@ -265,10 +311,10 @@ describe('postQuery – mql mode', () => {
     expect(mockDriver.query).not.toHaveBeenCalled();
   });
 
-  it('returns 400 when driver.query() throws in mql mode', async () => {
+  it('returns 400 when driver.query() throws a client DriverError in mql mode', async () => {
     const mockDriver = {
       queryMode: 'mql' as const,
-      query: vi.fn().mockRejectedValue(new Error('Unsupported MQL operation: foo')),
+      query: vi.fn().mockRejectedValue(new DriverError('Unsupported MQL operation: foo', 'client')),
     };
     vi.mocked(getDriver).mockReturnValue(mockDriver as any);
 

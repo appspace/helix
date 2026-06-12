@@ -1,5 +1,6 @@
-import { MongoClient, ObjectId } from 'mongodb';
+import { MongoClient, ObjectId, MongoNetworkError, MongoServerSelectionError, MongoParseError } from 'mongodb';
 import type { Db, Document } from 'mongodb';
+import { DriverError } from './interface.js';
 import type {
   DbDriver,
   ConnectionConfig,
@@ -10,6 +11,17 @@ import type {
   TableInfo,
   CollectionInfo,
 } from './interface.js';
+
+function classifyMongoError(err: unknown): DriverError {
+  const message = err instanceof Error ? err.message : String(err);
+  if (err instanceof MongoServerSelectionError || err instanceof MongoNetworkError) {
+    return new DriverError(message, 'transient', { cause: err });
+  }
+  if (err instanceof MongoParseError) {
+    return new DriverError(message, 'client', { cause: err });
+  }
+  return new DriverError(message, 'server', { cause: err });
+}
 
 /**
  * MQL request shape carried over the wire as a JSON string in `query()`'s `sql` arg.
@@ -165,17 +177,17 @@ function parseRequest(sql: string): MqlRequest {
   try {
     parsed = JSON.parse(sql);
   } catch {
-    throw new Error('MongoDB driver expects a JSON-encoded MQL request.');
+    throw new DriverError('MongoDB driver expects a JSON-encoded MQL request.', 'client');
   }
   if (!parsed || typeof parsed !== 'object') {
-    throw new Error('MongoDB driver expects a JSON-encoded MQL request.');
+    throw new DriverError('MongoDB driver expects a JSON-encoded MQL request.', 'client');
   }
   const req = parsed as MqlRequest;
   if (!req.collection || typeof req.collection !== 'string') {
-    throw new Error('MQL request requires a "collection" field.');
+    throw new DriverError('MQL request requires a "collection" field.', 'client');
   }
   if (!req.operation) {
-    throw new Error('MQL request requires an "operation" field.');
+    throw new DriverError('MQL request requires an "operation" field.', 'client');
   }
   return req;
 }
@@ -242,91 +254,96 @@ export class MongoDBDriver implements DbDriver {
   }
 
   async query(sql: string, _params?: unknown[], schema?: string): Promise<QueryResult> {
-    await this.ensureConnected();
-    const req = parseRequest(sql);
-    const db = this.db(schema);
-    const coll = db.collection(req.collection);
+    try {
+      await this.ensureConnected();
+      const req = parseRequest(sql);
+      const db = this.db(schema);
+      const coll = db.collection(req.collection);
 
-    switch (req.operation) {
-      case 'find': {
-        let cursor = coll.find(req.filter ?? {});
-        if (req.projection) cursor = cursor.project(req.projection) as typeof cursor;
-        if (req.sort) cursor = cursor.sort(req.sort);
-        if (typeof req.skip === 'number') cursor = cursor.skip(req.skip);
-        if (typeof req.limit === 'number') cursor = cursor.limit(req.limit);
-        const docs = await cursor.toArray();
-        return this.toQueryResult(docs);
-      }
-      case 'findOne': {
-        const doc = await coll.findOne(req.filter ?? {}, {
-          projection: req.projection,
-          sort: req.sort as Document | undefined,
-        });
-        return this.toQueryResult(doc ? [doc] : []);
-      }
-      case 'aggregate': {
-        const docs = await coll.aggregate(req.pipeline ?? []).toArray();
-        return this.toQueryResult(docs);
-      }
-      case 'count': {
-        const n = await coll.countDocuments(req.filter ?? {});
-        return {
-          rows: [{ count: n }],
-          columnMeta: [
-            {
-              name: 'count', orgName: 'count', table: req.collection, orgTable: req.collection,
-              pk: false, unique: false, notNull: true, mysqlType: 0,
-            },
-          ],
-        };
-      }
-      case 'insertOne': {
-        if (!req.document) throw new Error('insertOne requires a "document" field.');
-        const result = await coll.insertOne(req.document);
-        return {
-          rows: [],
-          columnMeta: [],
-          affectedRows: result.acknowledged ? 1 : 0,
-          insertId: null,
-        };
-      }
-      case 'updateOne': {
-        if (!req.update) throw new Error('updateOne requires an "update" field.');
-        const useId = req.id !== undefined;
-        const filter = useId ? coerceIdFilter(req.id) : (req.filter ?? {});
-        let result = await coll.updateOne(filter, req.update);
-        // Graceful fallback: if we promoted a 24-hex string to ObjectId and
-        // matched nothing, retry with the raw string id.
-        if (useId && result.matchedCount === 0 && idWasCoercedToObjectId(req.id)) {
-          result = await coll.updateOne({ _id: req.id } as Document, req.update);
+      switch (req.operation) {
+        case 'find': {
+          let cursor = coll.find(req.filter ?? {});
+          if (req.projection) cursor = cursor.project(req.projection) as typeof cursor;
+          if (req.sort) cursor = cursor.sort(req.sort);
+          if (typeof req.skip === 'number') cursor = cursor.skip(req.skip);
+          if (typeof req.limit === 'number') cursor = cursor.limit(req.limit);
+          const docs = await cursor.toArray();
+          return this.toQueryResult(docs);
         }
-        // Use matchedCount, not modifiedCount: routes treat affectedRows === 0
-        // as "row not found" (404). A no-op update (matched but unchanged) must
-        // not be reported as missing.
-        return {
-          rows: [],
-          columnMeta: [],
-          affectedRows: result.matchedCount,
-          insertId: null,
-        };
-      }
-      case 'deleteOne': {
-        const useId = req.id !== undefined;
-        const filter = useId ? coerceIdFilter(req.id) : (req.filter ?? {});
-        let result = await coll.deleteOne(filter);
-        if (useId && result.deletedCount === 0 && idWasCoercedToObjectId(req.id)) {
-          result = await coll.deleteOne({ _id: req.id } as Document);
+        case 'findOne': {
+          const doc = await coll.findOne(req.filter ?? {}, {
+            projection: req.projection,
+            sort: req.sort as Document | undefined,
+          });
+          return this.toQueryResult(doc ? [doc] : []);
         }
-        return {
-          rows: [],
-          columnMeta: [],
-          affectedRows: result.deletedCount,
-          insertId: null,
-        };
+        case 'aggregate': {
+          const docs = await coll.aggregate(req.pipeline ?? []).toArray();
+          return this.toQueryResult(docs);
+        }
+        case 'count': {
+          const n = await coll.countDocuments(req.filter ?? {});
+          return {
+            rows: [{ count: n }],
+            columnMeta: [
+              {
+                name: 'count', orgName: 'count', table: req.collection, orgTable: req.collection,
+                pk: false, unique: false, notNull: true, mysqlType: 0,
+              },
+            ],
+          };
+        }
+        case 'insertOne': {
+          if (!req.document) throw new DriverError('insertOne requires a "document" field.', 'client');
+          const result = await coll.insertOne(req.document);
+          return {
+            rows: [],
+            columnMeta: [],
+            affectedRows: result.acknowledged ? 1 : 0,
+            insertId: null,
+          };
+        }
+        case 'updateOne': {
+          if (!req.update) throw new DriverError('updateOne requires an "update" field.', 'client');
+          const useId = req.id !== undefined;
+          const filter = useId ? coerceIdFilter(req.id) : (req.filter ?? {});
+          let result = await coll.updateOne(filter, req.update);
+          // Graceful fallback: if we promoted a 24-hex string to ObjectId and
+          // matched nothing, retry with the raw string id.
+          if (useId && result.matchedCount === 0 && idWasCoercedToObjectId(req.id)) {
+            result = await coll.updateOne({ _id: req.id } as Document, req.update);
+          }
+          // Use matchedCount, not modifiedCount: routes treat affectedRows === 0
+          // as "row not found" (404). A no-op update (matched but unchanged) must
+          // not be reported as missing.
+          return {
+            rows: [],
+            columnMeta: [],
+            affectedRows: result.matchedCount,
+            insertId: null,
+          };
+        }
+        case 'deleteOne': {
+          const useId = req.id !== undefined;
+          const filter = useId ? coerceIdFilter(req.id) : (req.filter ?? {});
+          let result = await coll.deleteOne(filter);
+          if (useId && result.deletedCount === 0 && idWasCoercedToObjectId(req.id)) {
+            result = await coll.deleteOne({ _id: req.id } as Document);
+          }
+          return {
+            rows: [],
+            columnMeta: [],
+            affectedRows: result.deletedCount,
+            insertId: null,
+          };
+        }
+        default: {
+          throw new DriverError(`Unsupported MQL operation: ${String(req.operation)}`, 'client');
+        }
       }
-      default: {
-        throw new Error(`Unsupported MQL operation: ${String(req.operation)}`);
-      }
+    } catch (err) {
+      if (err instanceof DriverError) throw err;
+      throw classifyMongoError(err);
     }
   }
 
