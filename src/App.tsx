@@ -44,6 +44,9 @@ interface Tab {
   // auto-switch to the Plan view even when the parsed JSON is structurally
   // identical to the previous run.
   explainPlan?: unknown;
+  /** Verbatim `EXPLAIN FORMAT=JSON ...` statement returned by the server; shown
+   *  in the ExplainPlan footer so the user can see / copy what was run. */
+  explainSql?: string | null;
   explainError?: string | null;
   isExplaining?: boolean;
   explainPlanNonce?: number;
@@ -321,7 +324,7 @@ export default function App() {
       }
     }
 
-    updateTab(targetTab, { isRunning: true, results: null, resultSets: undefined, activeResultIndex: 0, queryError: null, execTime: null, explainPlan: null, explainError: null });
+    updateTab(targetTab, { isRunning: true, results: null, resultSets: undefined, activeResultIndex: 0, queryError: null, execTime: null, explainPlan: null, explainSql: null, explainError: null });
 
     const started = Date.now();
     try {
@@ -375,6 +378,7 @@ export default function App() {
       const res = await api.explain(text, activeSchema);
       updateTab(targetTab, {
         explainPlan: res.plan ?? null,
+        explainSql: res.explainSql ?? null,
         explainError: null,
         explainPlanNonce: Date.now(),
       });
@@ -382,6 +386,7 @@ export default function App() {
       const message = err instanceof Error ? err.message : String(err);
       updateTab(targetTab, {
         explainPlan: null,
+        explainSql: null,
         explainError: message,
         explainPlanNonce: Date.now(),
       });
@@ -609,6 +614,7 @@ export default function App() {
             onUpdateCell={handleUpdateCell}
             onInsertRow={handleInsertRow}
             explainPlan={currentTab?.explainPlan}
+            explainSql={currentTab?.explainSql ?? null}
             explainError={currentTab?.explainError ?? null}
             isExplaining={currentTab?.isExplaining ?? false}
             explainPlanNonce={currentTab?.explainPlanNonce}

@@ -84,6 +84,8 @@ interface ResultsTableProps {
   onInsertRow?: (table: string, values: Record<string, CellValue>) => Promise<void> | void;
   /** EXPLAIN FORMAT=JSON plan from the most recent Explain action. */
   explainPlan?: unknown;
+  /** Verbatim EXPLAIN statement returned by the server; shown in the plan footer. */
+  explainSql?: string | null;
   explainError?: string | null;
   isExplaining?: boolean;
   /** Bumped whenever a new plan arrives so the Plan tab can auto-focus. */
@@ -320,7 +322,7 @@ function resolveDeleteTarget(row: Row, columnMeta: ColumnMeta[] | undefined): De
   };
 }
 
-export function ResultsTable({ results, resultSets, activeResultIndex = 0, onSelectResultIndex, isRunning, error, executionTime, activeSchema, schemaData, onDeleteRow, onUpdateCell, onInsertRow, explainPlan, explainError, isExplaining = false, explainPlanNonce, t }: ResultsTableProps) {
+export function ResultsTable({ results, resultSets, activeResultIndex = 0, onSelectResultIndex, isRunning, error, executionTime, activeSchema, schemaData, onDeleteRow, onUpdateCell, onInsertRow, explainPlan, explainSql, explainError, isExplaining = false, explainPlanNonce, t }: ResultsTableProps) {
   const [sortCol, setSortCol] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [selectedRow, setSelectedRow] = useState<number | null>(null);
@@ -593,7 +595,7 @@ export function ResultsTable({ results, resultSets, activeResultIndex = 0, onSel
             <span style={{ fontSize: 12, color: t.colorError, fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>{explainError}</span>
           </div>
         ) : (
-          <ExplainPlan plan={explainPlan} t={t} />
+          <ExplainPlan plan={explainPlan} explainSql={explainSql ?? undefined} t={t} />
         )}
       </div>
     );
