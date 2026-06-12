@@ -5,6 +5,9 @@ import type { Theme } from '../theme';
 import type { SchemaData } from '../api';
 import type { HistoryEntry } from '../queryHistory';
 import type { SavedQuery } from '../savedQueries';
+import { SuggestionPopup, type Suggestion } from './SuggestionPopup';
+import { extractTableRefs, contextAtCaret, expectedSlot, KEYWORD_GROUPS } from '../lib/sqlContext';
+import { getCaretCoordinates } from '../lib/caretPosition';
 
 const LARGE_ROW_THRESHOLD = 5_000;
 
@@ -257,6 +260,177 @@ export function QueryEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runtimeError]);
 
+  // ─── Field-name autocomplete ──────────────────────────────────────────────
+  // Tracks an open suggestion popup anchored to the caret. Suggestions are
+  // re-computed on every value/selection change in `refreshSuggestions`.
+  interface SuggestionState {
+    items: Suggestion[];
+    selectedIndex: number;
+    position: { left: number; top: number };
+    /** Source range to overwrite when an item is accepted (start..caret). */
+    replaceStart: number;
+    replaceEnd: number;
+  }
+  const [suggestions, setSuggestions] = useState<SuggestionState | null>(null);
+
+  // Resolve the qualifier (`u` in `u.name`) to an actual table info row.
+  // Falls back to the bare table name when no alias was set. Returns null
+  // when nothing matches.
+  const resolveQualifier = (qualifier: string, schema: SchemaData | undefined, refs: { table: string; alias: string }[]) => {
+    if (!schema) return null;
+    const ql = qualifier.toLowerCase();
+    // Prefer an explicit alias match (closer to what the user wrote).
+    const aliasHit = refs.find(r => r.alias.toLowerCase() === ql);
+    if (aliasHit) {
+      const table = schema.tables.find(x => x.name.toLowerCase() === aliasHit.table.toLowerCase());
+      if (table) return table;
+    }
+    // Fall back to a direct table-name match — common when the user qualifies
+    // with the table name even though they could have used the alias.
+    return schema.tables.find(x => x.name.toLowerCase() === ql) ?? null;
+  };
+
+  const refreshSuggestions = (text: string, caret: number) => {
+    if (isMql) { setSuggestions(null); return; }
+    const ctx = contextAtCaret(text, caret);
+    if (!ctx) { setSuggestions(null); return; }
+
+    // Mask the prefix-being-typed before extracting table refs. Without this,
+    // the partial identifier directly after `FROM <table>` gets parsed as an
+    // alias — so typing `wh` on a line after `FROM users` makes the parser
+    // think `wh` is the alias of `users`, polluting the suggestion list.
+    const maskedText = text.slice(0, ctx.start) + ' '.repeat(caret - ctx.start) + text.slice(caret);
+    const refs = extractTableRefs(maskedText);
+    const slot = expectedSlot(text, ctx.start, ctx.qualifier);
+    const prefixLower = ctx.prefix.toLowerCase();
+    let items: Suggestion[] = [];
+
+    if (ctx.qualifier) {
+      // Qualified prefix is always column-only — bypass slot inspection.
+      const table = resolveQualifier(ctx.qualifier, schemaData, refs);
+      if (!table) { setSuggestions(null); return; }
+      items = table.columns.map(c => ({
+        kind: 'column' as const,
+        insert: c.name,
+        label: c.name,
+        detail: c.type,
+      }));
+    } else {
+      // Keywords first when the slot expects them. Statement-starter slots
+      // get *only* keywords so the user isn't shown a column list while typing
+      // `SELE`. Expression slots mix keywords with columns (NULL/AND/OR sit
+      // happily next to column names).
+      const pushKeywords = (words: readonly string[]) => {
+        for (const w of words) {
+          items.push({ kind: 'keyword', insert: w, label: w });
+        }
+      };
+      if (slot.keywords === 'statement') {
+        pushKeywords(KEYWORD_GROUPS.statement);
+      } else if (slot.keywords === 'expr') {
+        pushKeywords(KEYWORD_GROUPS.expr);
+      } else if (slot.keywords === 'by') {
+        pushKeywords(KEYWORD_GROUPS.by);
+      } else if (slot.keywords === 'any') {
+        // Permissive fallback — show clause keywords (WHERE, GROUP BY, etc.)
+        // since that's where the parser most often lands "after FROM".
+        pushKeywords(KEYWORD_GROUPS.clauses);
+      }
+
+      if (slot.columns && schemaData && refs.length > 0) {
+        const seenCol = new Set<string>();
+        for (const ref of refs) {
+          const tinfo = schemaData.tables.find(x => x.name.toLowerCase() === ref.table.toLowerCase());
+          if (!tinfo) continue;
+          for (const c of tinfo.columns) {
+            const k = `${tinfo.name}.${c.name}`.toLowerCase();
+            if (seenCol.has(k)) continue;
+            seenCol.add(k);
+            items.push({
+              kind: 'column',
+              insert: c.name,
+              label: c.name,
+              detail: `${tinfo.name} · ${c.type}`,
+            });
+          }
+        }
+        // Aliases — only when an alias exists (alias != table name).
+        for (const ref of refs) {
+          if (ref.alias.toLowerCase() === ref.table.toLowerCase()) continue;
+          items.push({
+            kind: 'alias',
+            insert: ref.alias,
+            label: ref.alias,
+            detail: ref.table,
+          });
+        }
+      }
+      if (slot.tables && schemaData) {
+        for (const t of schemaData.tables) {
+          items.push({
+            kind: 'table',
+            insert: t.name,
+            label: t.name,
+            detail: `${t.columns.length} cols`,
+          });
+        }
+      }
+    }
+
+    if (items.length === 0) { setSuggestions(null); return; }
+
+    // Filter by prefix: case-insensitive startsWith first, then includes.
+    // When prefix is empty (user just typed `.`), keep the full list.
+    if (prefixLower) {
+      const starts: Suggestion[] = [];
+      const contains: Suggestion[] = [];
+      for (const it of items) {
+        const il = it.label.toLowerCase();
+        if (il.startsWith(prefixLower)) starts.push(it);
+        else if (il.includes(prefixLower)) contains.push(it);
+      }
+      items = [...starts, ...contains];
+    }
+
+    if (items.length === 0) { setSuggestions(null); return; }
+
+    // Cap the list. The popup scrolls but a giant render is wasteful and rare
+    // matches at the bottom are noise more than help.
+    items = items.slice(0, 50);
+
+    const el = textareaRef.current;
+    if (!el) { setSuggestions(null); return; }
+    // Anchor at the start of the prefix so the popup grows down-and-right from
+    // the partial word the user is editing (cursor itself is one char ahead).
+    const coords = getCaretCoordinates(el, ctx.start);
+    // Subtract the textarea's scroll so the popup tracks the visible caret,
+    // not the absolute caret position inside a scrolled textarea.
+    const left = coords.left - el.scrollLeft;
+    const top = coords.top - el.scrollTop + coords.height + 2;
+
+    setSuggestions({
+      items,
+      selectedIndex: 0,
+      position: { left, top },
+      replaceStart: ctx.start,
+      replaceEnd: caret,
+    });
+  };
+
+  const acceptSuggestion = (item: Suggestion) => {
+    const el = textareaRef.current;
+    if (!el || !suggestions) return;
+    const next = value.slice(0, suggestions.replaceStart) + item.insert + value.slice(suggestions.replaceEnd);
+    onChange(next);
+    const caretAt = suggestions.replaceStart + item.insert.length;
+    // Restore caret post-React-update so it lands after the inserted text.
+    requestAnimationFrame(() => {
+      el.selectionStart = el.selectionEnd = caretAt;
+      el.focus();
+    });
+    setSuggestions(null);
+  };
+
   const handleRunClick = () => {
     if (isMql && value.trim()) {
       try {
@@ -271,6 +445,31 @@ export function QueryEditor({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Suggestion-popup keys take precedence over everything else (Run shortcut,
+    // Format, plain Tab/Enter) so the user can drive the popup without losing
+    // these keys to the editor.
+    if (suggestions) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSuggestions(s => s ? { ...s, selectedIndex: (s.selectedIndex + 1) % s.items.length } : s);
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSuggestions(s => s ? { ...s, selectedIndex: (s.selectedIndex - 1 + s.items.length) % s.items.length } : s);
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        acceptSuggestion(suggestions.items[suggestions.selectedIndex]);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setSuggestions(null);
+        return;
+      }
+    }
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
       e.preventDefault();
       handleRunClick();
@@ -708,7 +907,7 @@ export function QueryEditor({
           )}
         </div>
       )}
-      <div style={s.editorWrap}>
+      <div style={{ ...s.editorWrap, position: 'relative' }}>
         <div style={s.lineNums} aria-hidden="true">
           {value.split('\n').map((_, i) => (
             <div key={i} style={s.lineNum}>{i + 1}</div>
@@ -720,12 +919,39 @@ export function QueryEditor({
           onChange={e => {
             if (editorError) setEditorError(null);
             onChange(e.target.value);
+            // Recompute suggestions for the new value; the React selection
+            // updates synchronously here so `selectionStart` is the caret
+            // position right after the edit.
+            refreshSuggestions(e.target.value, e.target.selectionStart);
+          }}
+          onKeyUp={e => {
+            // Arrow / Home / End move the caret without firing onChange. Drop
+            // the popup in that case so it doesn't drift off a stale word.
+            if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key)) {
+              if (suggestions) setSuggestions(null);
+            }
+          }}
+          onMouseDown={() => { if (suggestions) setSuggestions(null); }}
+          onBlur={() => {
+            // Defer so a click on the popup row (which calls acceptSuggestion)
+            // gets a chance to run before we tear the popup down on blur.
+            setTimeout(() => setSuggestions(null), 100);
           }}
           onKeyDown={handleKeyDown}
           style={s.textarea}
           spellCheck={false}
           autoComplete="off"
         />
+        {suggestions && (
+          <SuggestionPopup
+            items={suggestions.items}
+            selectedIndex={suggestions.selectedIndex}
+            onHover={(i) => setSuggestions(s => s ? { ...s, selectedIndex: i } : s)}
+            onAccept={(item) => acceptSuggestion(item)}
+            position={suggestions.position}
+            t={t}
+          />
+        )}
       </div>
     </div>
   );
