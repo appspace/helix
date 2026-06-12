@@ -4,6 +4,7 @@ import { join } from 'path';
 import { postConnect, deleteConnect, getStatus, postTestConnect } from './routes/connect.js';
 import { getSchemas, getSchema } from './routes/schema.js';
 import { postQuery } from './routes/query.js';
+import { postExplain } from './routes/explain.js';
 import { postDeleteRow } from './routes/deleteRow.js';
 import { postUpdateCell } from './routes/updateCell.js';
 import { postInsertRow } from './routes/insertRow.js';
@@ -35,6 +36,7 @@ app.get('/api/table-ddl', getTableDdl);
 
 // Query
 app.post('/api/query', postQuery);
+app.post('/api/explain', postExplain);
 app.post('/api/delete-row', postDeleteRow);
 app.post('/api/update-cell', postUpdateCell);
 app.post('/api/insert-row', postInsertRow);

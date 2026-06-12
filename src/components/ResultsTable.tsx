@@ -3,6 +3,7 @@ import type { CSSProperties, MutableRefObject } from 'react';
 import type { Theme } from '../theme';
 import type { ColumnMeta, SchemaData } from '../api';
 import { InsertRowDialog } from './InsertRowDialog';
+import { ExplainPlan } from './ExplainPlan';
 import { rowsToCsv, rowsToJson, downloadBlob, sanitizeFilename } from '../export';
 import { formatSqlValue } from '../lib/sql';
 
@@ -81,6 +82,12 @@ interface ResultsTableProps {
   onDeleteRow?: (row: Row, target: DeleteTarget) => Promise<void> | void;
   onUpdateCell?: (row: Row, target: UpdateCellTarget) => Promise<void> | void;
   onInsertRow?: (table: string, values: Record<string, CellValue>) => Promise<void> | void;
+  /** EXPLAIN FORMAT=JSON plan from the most recent Explain action. */
+  explainPlan?: unknown;
+  explainError?: string | null;
+  isExplaining?: boolean;
+  /** Bumped whenever a new plan arrives so the Plan tab can auto-focus. */
+  explainPlanNonce?: number;
   t: Theme;
 }
 
@@ -313,7 +320,7 @@ function resolveDeleteTarget(row: Row, columnMeta: ColumnMeta[] | undefined): De
   };
 }
 
-export function ResultsTable({ results, resultSets, activeResultIndex = 0, onSelectResultIndex, isRunning, error, executionTime, activeSchema, schemaData, onDeleteRow, onUpdateCell, onInsertRow, t }: ResultsTableProps) {
+export function ResultsTable({ results, resultSets, activeResultIndex = 0, onSelectResultIndex, isRunning, error, executionTime, activeSchema, schemaData, onDeleteRow, onUpdateCell, onInsertRow, explainPlan, explainError, isExplaining = false, explainPlanNonce, t }: ResultsTableProps) {
   const [sortCol, setSortCol] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [selectedRow, setSelectedRow] = useState<number | null>(null);
@@ -334,6 +341,22 @@ export function ResultsTable({ results, resultSets, activeResultIndex = 0, onSel
   const filterInputRef = useRef<HTMLInputElement | null>(null);
   // Full-cell viewer for nested objects/arrays from MongoDB documents.
   const [expandedCell, setExpandedCell] = useState<{ col: string; value: RawCellValue } | null>(null);
+
+  // Plan view: shown when the user has clicked Explain on this tab. We track a
+  // boolean separately from `explainPlan` so the user can toggle back to the
+  // result grid without losing the plan. A nonce bumped on the App-side flips
+  // this back to true whenever a fresh plan arrives.
+  const [planVisible, setPlanVisible] = useState(false);
+  useEffect(() => {
+    if (explainPlanNonce !== undefined) setPlanVisible(true);
+  }, [explainPlanNonce]);
+  // Drop the plan view when the user switches tabs or runs a new query (clears
+  // `explainPlan` upstream). Otherwise the stale plan flashes briefly.
+  useEffect(() => {
+    if (!explainPlan && !explainError && !isExplaining) setPlanVisible(false);
+  }, [explainPlan, explainError, isExplaining]);
+
+  const planAvailable = isExplaining || explainPlan !== undefined && explainPlan !== null || !!explainError;
 
   // Column layout: order and widths
   const [colOrder, setColOrder] = useState<string[]>([]);
@@ -530,6 +553,52 @@ export function ResultsTable({ results, resultSets, activeResultIndex = 0, onSel
     return s.td;
   };
 
+  // Plan view takes over when the user has just clicked Explain or while a plan
+  // is being computed. A small tab strip at the top lets the user flip back to
+  // the result grid (when one exists).
+  if (planVisible) {
+    const hasResults = !!results;
+    return (
+      <div style={s.root}>
+        <div style={s.tabBar}>
+          <div
+            style={hasResults ? s.tabInactive : { ...s.tabInactive, opacity: 0.5, cursor: 'default' }}
+            onClick={() => { if (hasResults) setPlanVisible(false); }}
+            role={hasResults ? 'button' : undefined}
+          >
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 3h18v5H3zM3 8h18v5H3zM3 13h18v8H3z"/>
+            </svg>
+            Results
+          </div>
+          <div style={s.tabActive}>
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="6" cy="5" r="2"/><circle cx="18" cy="5" r="2"/><circle cx="12" cy="19" r="2"/>
+              <path d="M6 7v3a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7"/><line x1="12" y1="12" x2="12" y2="17"/>
+            </svg>
+            Plan
+          </div>
+          <div style={{ flex: 1 }}/>
+        </div>
+        {isExplaining ? (
+          <div style={{ ...s.center, flex: 1 }}>
+            <div style={{ width: 20, height: 20, border: `2px solid ${t.spinnerTrack}`, borderTop: `2px solid ${t.spinnerHead}`, borderRadius: '50%', animation: 'spin 0.8s linear infinite' }}/>
+            <span style={{ fontSize: 12, color: t.textMuted }}>Computing plan…</span>
+          </div>
+        ) : explainError ? (
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '16px 20px', background: t.colorErrorBg, borderTop: `1px solid ${t.colorErrorBorder}` }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={t.colorError} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 2 }}>
+              <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+            </svg>
+            <span style={{ fontSize: 12, color: t.colorError, fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>{explainError}</span>
+          </div>
+        ) : (
+          <ExplainPlan plan={explainPlan} t={t} />
+        )}
+      </div>
+    );
+  }
+
   if (isRunning) return (
     <div style={{ ...s.root, ...s.center }}>
       <div style={{ width: 20, height: 20, border: `2px solid ${t.spinnerTrack}`, borderTop: `2px solid ${t.spinnerHead}`, borderRadius: '50%', animation: 'spin 0.8s linear infinite' }}/>
@@ -652,6 +721,20 @@ export function ResultsTable({ results, resultSets, activeResultIndex = 0, onSel
           </svg>
           Output
         </div>
+        {planAvailable && (
+          <div
+            style={s.tabInactive}
+            onClick={() => setPlanVisible(true)}
+            role="button"
+            title="Show EXPLAIN plan from the last Explain action"
+          >
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="6" cy="5" r="2"/><circle cx="18" cy="5" r="2"/><circle cx="12" cy="19" r="2"/>
+              <path d="M6 7v3a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7"/><line x1="12" y1="12" x2="12" y2="17"/>
+            </svg>
+            Plan
+          </div>
+        )}
         <div style={{ flex: 1 }}/>
         <button
           style={{ ...s.exportBtn, background: filterOpen ? t.bgHover : t.bgElevated }}

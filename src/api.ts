@@ -159,6 +159,13 @@ export const api = {
     );
   },
 
+  explain(sql: string, schema: string) {
+    return request<{ plan: unknown; explainSql: string; executionTime: number }>(
+      '/api/explain',
+      { method: 'POST', body: JSON.stringify({ sql, schema }) }
+    );
+  },
+
   deleteRow(schema: string, table: string, where: DeleteRowWhere[]) {
     return request<{ affectedRows: number; sql: string }>('/api/delete-row', {
       method: 'POST',
