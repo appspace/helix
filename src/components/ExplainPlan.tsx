@@ -88,10 +88,10 @@ function collectWarnings(node: Node): Severity[] {
 }
 
 interface NodeRender {
-  kind: 'block' | 'table' | 'nested_loop' | 'ordering' | 'grouping' | 'union' | 'attached' | 'materialized' | 'duplicates' | 'unknown';
+  kind: 'table' | 'nested_loop' | 'ordering' | 'grouping' | 'union' | 'attached' | 'materialized' | 'duplicates' | 'unknown';
   title: string;
-  /** Lines of "label: value" rendered below the title. */
-  stats: { label: string; value: string }[];
+  /** Lines of "label: value" rendered below the title. `title` holds the full value when `value` is truncated. */
+  stats: { label: string; value: string; title?: string }[];
   warnings: Severity[];
   children: NodeRender[];
 }
@@ -114,7 +114,7 @@ function buildTable(t: Node): NodeRender {
   const cond = getStr(t, 'attached_condition');
   const ref = Array.isArray(t['ref']) ? (t['ref'] as unknown[]).join(', ') : undefined;
 
-  const stats: { label: string; value: string }[] = [];
+  const stats: { label: string; value: string; title?: string }[] = [];
   if (access) stats.push({ label: 'access_type', value: access });
   if (key) stats.push({ label: 'key', value: key });
   else if (possible) stats.push({ label: 'possible_keys', value: possible });
@@ -123,7 +123,9 @@ function buildTable(t: Node): NodeRender {
   if (produced !== undefined) stats.push({ label: 'rows produced', value: produced.toLocaleString() });
   if (filtered) stats.push({ label: 'filtered', value: `${filtered}%` });
   if (cost) stats.push({ label: 'cost', value: cost });
-  if (cond) stats.push({ label: 'condition', value: cond });
+  if (cond) stats.push(cond.length > 120
+    ? { label: 'condition', value: `${cond.slice(0, 120)}…`, title: cond }
+    : { label: 'condition', value: cond });
 
   const children: NodeRender[] = [];
   const attached = t['attached_subqueries'];
@@ -379,7 +381,7 @@ function PlanTree({ node, t, depth }: PlanTreeProps) {
           {node.stats.map((st, i) => (
             <span key={i} style={s.statItem}>
               <span style={s.statLabel}>{st.label}:</span>
-              <span style={s.statVal}>{st.value}</span>
+              <span style={s.statVal} title={st.title}>{st.value}</span>
             </span>
           ))}
         </div>

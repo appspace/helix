@@ -358,7 +358,7 @@ export function ResultsTable({ results, resultSets, activeResultIndex = 0, onSel
     if (!explainPlan && !explainError && !isExplaining) setPlanVisible(false);
   }, [explainPlan, explainError, isExplaining]);
 
-  const planAvailable = isExplaining || explainPlan !== undefined && explainPlan !== null || !!explainError;
+  const planAvailable = isExplaining || explainPlan != null || !!explainError;
 
   // Column layout: order and widths
   const [colOrder, setColOrder] = useState<string[]>([]);
