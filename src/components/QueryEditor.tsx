@@ -86,6 +86,7 @@ export function QueryEditor({
 }: QueryEditorProps) {
   const isMql = queryMode === 'mql';
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const lineNumsRef = useRef<HTMLDivElement>(null);
 
   const [historyOpen, setHistoryOpen] = useState(false);
   const historyAnchorRef = useRef<HTMLDivElement>(null);
@@ -492,7 +493,7 @@ export function QueryEditor({
   };
 
   const s = {
-    root: { display: 'flex', flexDirection: 'column', background: t.bgSurface, borderBottom: `1px solid ${t.border}` } as CSSProperties,
+    root: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: t.bgSurface, borderBottom: `1px solid ${t.border}` } as CSSProperties,
     toolbar: { display: 'flex', alignItems: 'center', gap: 2, padding: '5px 10px', borderBottom: `1px solid ${t.border}`, flexShrink: 0, background: t.bgToolbar } as CSSProperties,
     runBtn: { display: 'flex', alignItems: 'center', gap: 6, height: 28, padding: '0 12px', background: t.accent, color: t.textInverse, border: 'none', borderRadius: 5, fontSize: 12, fontWeight: 600, fontFamily: '"IBM Plex Sans", sans-serif', cursor: 'pointer' } as CSSProperties,
     explainBtn: { display: 'flex', alignItems: 'center', gap: 6, height: 28, padding: '0 10px', background: t.bgElevated, color: t.textPrimary, border: `1px solid ${t.border}`, borderRadius: 5, fontSize: 12, fontWeight: 500, fontFamily: '"IBM Plex Sans", sans-serif', cursor: 'pointer' } as CSSProperties,
@@ -908,7 +909,7 @@ export function QueryEditor({
         </div>
       )}
       <div style={{ ...s.editorWrap, position: 'relative' }}>
-        <div style={s.lineNums} aria-hidden="true">
+        <div ref={lineNumsRef} style={s.lineNums} aria-hidden="true">
           {value.split('\n').map((_, i) => (
             <div key={i} style={s.lineNum}>{i + 1}</div>
           ))}
@@ -932,6 +933,11 @@ export function QueryEditor({
             }
           }}
           onMouseDown={() => { if (suggestions) setSuggestions(null); }}
+          onScroll={e => {
+            // Keep the line-number gutter aligned with the textarea now that
+            // the textarea scrolls internally instead of the whole editor.
+            if (lineNumsRef.current) lineNumsRef.current.scrollTop = e.currentTarget.scrollTop;
+          }}
           onBlur={() => {
             // Defer so a click on the popup row (which calls acceptSuggestion)
             // gets a chance to run before we tear the popup down on blur.
