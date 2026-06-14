@@ -250,12 +250,17 @@ export function SchemaBrowser({ schema, activeTable, onTableSelect, onSchemaChan
               <div key={table.name}>
                 <div
                   style={{ ...s.tableRow, ...(activeTable === table.name ? s.tableRowActive : {}) }}
-                  onClick={() => { onTableSelect(table.name); toggleTable(table.name); }}
+                  // Single-click only expands/collapses the column list — it must
+                  // not steal the user's current editor tab. Opening a query tab
+                  // is a deliberate action: double-click, or the context menu's
+                  // "Query table". See #54.
+                  onClick={() => toggleTable(table.name)}
+                  onDoubleClick={() => onTableSelect(table.name)}
                   onContextMenu={(e) => {
                     e.preventDefault();
                     setContextMenu({ x: e.clientX, y: e.clientY, name: table.name, type: 'table' });
                   }}
-                  title={table.comment || undefined}
+                  title={table.comment ? `${table.comment} — double-click to query` : 'Double-click to query'}
                 >
                   <Chevron open={!!expandedTables[table.name]} color={t.textMuted}/>
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={activeTable === table.name ? t.accent : t.textMuted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{flexShrink:0}}>
@@ -318,6 +323,12 @@ export function SchemaBrowser({ schema, activeTable, onTableSelect, onSchemaChan
           />
           {contextMenu.type === 'table' && (<>
             <div style={{ height: 1, background: t.borderSubtle, margin: '3px 0' }}/>
+            <CtxItem
+              t={t}
+              onClick={() => { onTableSelect(contextMenu.name); setContextMenu(null); }}
+              icon={<><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></>}
+              label="Query table"
+            />
             {onAlterTable && (
               <CtxItem
                 t={t}
