@@ -235,7 +235,7 @@ describe('MongoDBDriver.query – find', () => {
     );
     expect(mockClient.db).toHaveBeenCalledWith('app');
     expect(mockDb.collection).toHaveBeenCalledWith('users');
-    expect(mockCollection.find).toHaveBeenCalledWith({ active: true });
+    expect(mockCollection.find).toHaveBeenCalledWith({ active: true }, {});
     expect(r.rows).toEqual([
       { _id: '507f1f77bcf86cd799439011', name: 'Alice', when: '2024-01-02 03:04:05' },
     ]);
@@ -402,7 +402,7 @@ describe('MongoDBDriver.query – findOne / aggregate / count', () => {
     );
     expect(mockCollection.aggregate).toHaveBeenCalledWith([
       { $group: { _id: '$status', n: { $sum: 1 } } },
-    ]);
+    ], {});
     expect(r.rows).toEqual([{ _id: 'A', n: 2 }]);
   });
 
@@ -411,7 +411,7 @@ describe('MongoDBDriver.query – findOne / aggregate / count', () => {
     const r = await makeDriver().query(
       JSON.stringify({ collection: 'users', operation: 'count', filter: { active: true } }),
     );
-    expect(mockCollection.countDocuments).toHaveBeenCalledWith({ active: true });
+    expect(mockCollection.countDocuments).toHaveBeenCalledWith({ active: true }, {});
     expect(r.rows).toEqual([{ count: 42 }]);
   });
 });

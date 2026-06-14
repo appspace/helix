@@ -84,13 +84,19 @@ export interface DbDriver {
    * accept a MQL request object. Routes branch on this to validate the body shape.
    */
   readonly queryMode: 'sql' | 'mql';
-  /** Run a query, optionally switching schema first (atomically on one connection). */
-  query(sql: string, params?: unknown[], schema?: string): Promise<QueryResult>;
+  /**
+   * Run a query, optionally switching schema first (atomically on one connection).
+   * When `timeoutMs` is set the driver cancels the statement on the server after
+   * that many ms (MySQL `KILL QUERY`, Postgres `pg_cancel_backend`, MongoDB
+   * `maxTimeMS`) and rejects with a `transient` DriverError.
+   */
+  query(sql: string, params?: unknown[], schema?: string, timeoutMs?: number): Promise<QueryResult>;
   /**
    * Run one or more semicolon-separated statements and return a result per statement.
-   * Implemented by sql-mode drivers; mql-mode drivers can omit it.
+   * Implemented by sql-mode drivers; mql-mode drivers can omit it. `timeoutMs` has
+   * the same cancel-on-deadline semantics as {@link query}.
    */
-  queryAll?(sql: string, schema?: string): Promise<QueryResult[]>;
+  queryAll?(sql: string, schema?: string, timeoutMs?: number): Promise<QueryResult[]>;
   getSchemas(): Promise<string[]>;
   getSchema(schema: string): Promise<SchemaInfo>;
   /** Targeted lookup for a single table — returns null if it doesn't exist. */

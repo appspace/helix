@@ -39,7 +39,7 @@ describe('postQuery – driver delegation (sql mode)', () => {
       .send({ sql: 'SELECT * FROM users', schema: 'mydb' });
 
     expect(res.status).toBe(200);
-    expect(mockDriver.query).toHaveBeenCalledWith('SELECT * FROM users', [], 'mydb');
+    expect(mockDriver.query).toHaveBeenCalledWith('SELECT * FROM users', [], 'mydb', undefined);
     expect(res.body.columns).toEqual(['id', 'name']);
     expect(res.body.rows).toEqual([{ id: 1, name: 'Alice' }]);
     expect(res.body.columnMeta[0]).toMatchObject({ name: 'id', pk: true });
@@ -61,7 +61,7 @@ describe('postQuery – driver delegation (sql mode)', () => {
       .send({ sql: 'SELECT 1 AS one' });
 
     expect(res.status).toBe(200);
-    expect(mockDriver.query).toHaveBeenCalledWith('SELECT 1 AS one', [], undefined);
+    expect(mockDriver.query).toHaveBeenCalledWith('SELECT 1 AS one', [], undefined, undefined);
   });
 
   it('returns affectedRows and insertId for DML (empty columnMeta)', async () => {
@@ -102,7 +102,7 @@ describe('postQuery – driver delegation (sql mode)', () => {
       .send({ sql: 'SELECT 1 AS a; SELECT 2 AS b', schema: 'mydb' });
 
     expect(res.status).toBe(200);
-    expect(mockDriver.queryAll).toHaveBeenCalledWith('SELECT 1 AS a; SELECT 2 AS b', 'mydb');
+    expect(mockDriver.queryAll).toHaveBeenCalledWith('SELECT 1 AS a; SELECT 2 AS b', 'mydb', undefined);
     expect(mockDriver.query).not.toHaveBeenCalled();
     // Legacy fields mirror the first statement so old clients keep working.
     expect(res.body.columns).toEqual(['a']);
@@ -171,6 +171,78 @@ describe('postQuery – driver delegation (sql mode)', () => {
 
     expect(res.status).toBe(500);
     expect(res.body.error).toBe('something unexpected');
+  });
+});
+
+describe('postQuery – timeout forwarding', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('forwards a positive timeoutMs to driver.queryAll', async () => {
+    const mockDriver = {
+      queryMode: 'sql' as const,
+      query: vi.fn(),
+      queryAll: vi.fn().mockResolvedValue([{ rows: [], columnMeta: [] }]),
+    };
+    vi.mocked(getDriver).mockReturnValue(mockDriver as any);
+
+    await request(makeApp())
+      .post('/api/query')
+      .send({ sql: 'SELECT 1', schema: 'mydb', timeoutMs: 5000 });
+
+    expect(mockDriver.queryAll).toHaveBeenCalledWith('SELECT 1', 'mydb', 5000);
+  });
+
+  it('forwards a positive timeoutMs to driver.query in mql mode', async () => {
+    const mockDriver = {
+      queryMode: 'mql' as const,
+      query: vi.fn().mockResolvedValue({ rows: [], columnMeta: [] }),
+    };
+    vi.mocked(getDriver).mockReturnValue(mockDriver as any);
+
+    await request(makeApp())
+      .post('/api/query')
+      .send({ mql: { collection: 'c', operation: 'find' }, timeoutMs: 1500 });
+
+    const [, , , timeoutArg] = mockDriver.query.mock.calls[0];
+    expect(timeoutArg).toBe(1500);
+  });
+
+  it.each([
+    ['absent', undefined],
+    ['zero', 0],
+    ['negative', -1],
+    ['non-numeric', 'soon'],
+  ])('passes undefined when timeoutMs is %s', async (_label, value) => {
+    const mockDriver = {
+      queryMode: 'sql' as const,
+      query: vi.fn(),
+      queryAll: vi.fn().mockResolvedValue([{ rows: [], columnMeta: [] }]),
+    };
+    vi.mocked(getDriver).mockReturnValue(mockDriver as any);
+
+    await request(makeApp())
+      .post('/api/query')
+      .send({ sql: 'SELECT 1', timeoutMs: value });
+
+    expect(mockDriver.queryAll).toHaveBeenCalledWith('SELECT 1', undefined, undefined);
+  });
+
+  it('surfaces a transient timeout DriverError as HTTP 503', async () => {
+    const mockDriver = {
+      queryMode: 'sql' as const,
+      query: vi.fn(),
+      queryAll: vi.fn().mockRejectedValue(
+        new DriverError('Query cancelled: exceeded the 5s timeout.', 'transient'),
+      ),
+    };
+    vi.mocked(getDriver).mockReturnValue(mockDriver as any);
+
+    const res = await request(makeApp())
+      .post('/api/query')
+      .send({ sql: 'SELECT SLEEP(99)', timeoutMs: 5000 });
+
+    expect(res.status).toBe(503);
+    expect(res.body.error).toMatch(/exceeded the 5s timeout/i);
   });
 });
 

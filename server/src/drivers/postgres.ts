@@ -1,6 +1,7 @@
 import pg from 'pg';
 import { DriverError } from './interface.js';
 import type { DbDriver, ConnectionConfig, QueryResult, ColumnMeta, ColumnInfo, SchemaInfo, TableInfo } from './interface.js';
+import { withQueryTimeout } from './timeout.js';
 
 // Return DATE / TIME / TIMESTAMP / TIMESTAMPTZ / TIMETZ as raw strings rather
 // than JS Dates. pg's default parsers route through `new Date(...)`, which
@@ -142,10 +143,29 @@ export class PostgresDriver implements DbDriver {
     await this.pool.end();
   }
 
-  async query(sql: string, params?: unknown[], schema?: string): Promise<QueryResult> {
+  /**
+   * `pg_cancel_backend` cancels the statement running on `pid` without dropping
+   * the connection. Run on a separate pooled client because the one running the
+   * timed-out query is busy. Best-effort — the timeout error surfaces regardless.
+   */
+  private async cancelBackend(pid: number): Promise<void> {
+    let client: pg.PoolClient | undefined;
+    try {
+      client = await this.pool.connect();
+      await client.query('SELECT pg_cancel_backend($1)', [pid]);
+    } catch {
+      /* best-effort cancel */
+    } finally {
+      client?.release();
+    }
+  }
+
+  async query(sql: string, params?: unknown[], schema?: string, timeoutMs?: number): Promise<QueryResult> {
     try {
       const client = await this.pool.connect();
+      const pid = (client as { processID?: number }).processID;
       let searchPathSet = false;
+      let timedOut = false;
       try {
         if (schema) {
           await client.query(`SET search_path TO ${this.escapeIdent(schema)}`);
@@ -159,7 +179,11 @@ export class PostgresDriver implements DbDriver {
           let n = 0;
           pgSql = sql.replace(/\?/g, () => `$${++n}`);
         }
-        const result = await client.query({ text: pgSql, values: params?.length ? params : undefined });
+        const work = client.query({ text: pgSql, values: params?.length ? params : undefined });
+        const result = await withQueryTimeout(work, timeoutMs, () => {
+          timedOut = true;
+          if (typeof pid === 'number') void this.cancelBackend(pid);
+        });
         // node-pg's simple query protocol returns an array of results when the SQL
         // contains multiple statements. `query()` keeps the legacy single-result
         // contract — `queryAll` is the multi-statement entry point — so collapse
@@ -167,12 +191,7 @@ export class PostgresDriver implements DbDriver {
         const single = Array.isArray(result) ? (result as pg.QueryResult[])[result.length - 1] : result;
         return buildPgResult(single);
       } finally {
-        // pg.Pool reuses clients without resetting session state, so search_path
-        // would leak to the next caller on this same client.
-        if (searchPathSet) {
-          try { await client.query('SET search_path TO DEFAULT'); } catch { /* fall through to release */ }
-        }
-        client.release();
+        await this.finishClient(client, searchPathSet, timedOut);
       }
     } catch (err) {
       if (err instanceof DriverError) throw err;
@@ -180,10 +199,12 @@ export class PostgresDriver implements DbDriver {
     }
   }
 
-  async queryAll(sql: string, schema?: string): Promise<QueryResult[]> {
+  async queryAll(sql: string, schema?: string, timeoutMs?: number): Promise<QueryResult[]> {
     try {
       const client = await this.pool.connect();
+      const pid = (client as { processID?: number }).processID;
       let searchPathSet = false;
+      let timedOut = false;
       try {
         if (schema) {
           await client.query(`SET search_path TO ${this.escapeIdent(schema)}`);
@@ -191,19 +212,38 @@ export class PostgresDriver implements DbDriver {
         }
         // Always go through the simple query protocol (no values) so multi-statement
         // SQL fans out to one result per statement.
-        const raw = await client.query(sql);
+        const work = client.query(sql);
+        const raw = await withQueryTimeout(work, timeoutMs, () => {
+          timedOut = true;
+          if (typeof pid === 'number') void this.cancelBackend(pid);
+        });
         const results = Array.isArray(raw) ? (raw as pg.QueryResult[]) : [raw];
         return results.map(buildPgResult);
       } finally {
-        if (searchPathSet) {
-          try { await client.query('SET search_path TO DEFAULT'); } catch { /* fall through to release */ }
-        }
-        client.release();
+        await this.finishClient(client, searchPathSet, timedOut);
       }
     } catch (err) {
       if (err instanceof DriverError) throw err;
       throw classifyPgError(err);
     }
+  }
+
+  /**
+   * Reset session state and return the client to the pool — but on timeout, skip
+   * the reset (it would queue behind the statement still being cancelled) and
+   * `release(true)` to discard the client so the pool never reuses it mid-cancel.
+   * pg.Pool reuses clients without resetting state, so search_path would
+   * otherwise leak to the next caller on this same client.
+   */
+  private async finishClient(client: pg.PoolClient, searchPathSet: boolean, timedOut: boolean): Promise<void> {
+    if (timedOut) {
+      client.release(true);
+      return;
+    }
+    if (searchPathSet) {
+      try { await client.query('SET search_path TO DEFAULT'); } catch { /* fall through to release */ }
+    }
+    client.release();
   }
 
   async getSchemas(): Promise<string[]> {

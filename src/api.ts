@@ -145,17 +145,19 @@ export const api = {
     return request<{ ddl: string }>(`/api/table-ddl?schema=${encodeURIComponent(schema)}&table=${encodeURIComponent(name)}${t}`);
   },
 
-  query(sql: string, schema: string) {
+  // `timeoutMs`, when > 0, asks the server to cancel the query (KILL QUERY /
+  // pg_cancel_backend / maxTimeMS) after that many ms. Omit or pass 0 for none.
+  query(sql: string, schema: string, timeoutMs?: number) {
     return request<QueryResponse>(
       '/api/query',
-      { method: 'POST', body: JSON.stringify({ sql, schema }) }
+      { method: 'POST', body: JSON.stringify({ sql, schema, timeoutMs }) }
     );
   },
 
-  queryMql(mql: unknown, schema: string) {
+  queryMql(mql: unknown, schema: string, timeoutMs?: number) {
     return request<QueryResponse>(
       '/api/query',
-      { method: 'POST', body: JSON.stringify({ mql, schema }) }
+      { method: 'POST', body: JSON.stringify({ mql, schema, timeoutMs }) }
     );
   },
 

@@ -48,8 +48,20 @@ interface QueryEditorProps {
   onDeleteSavedQuery?: (id: string) => void;
   onRenameSavedQuery?: (id: string, name: string) => void;
   onReopenSavedQuery?: (query: SavedQuery) => void;
+  /** Per-query timeout in seconds; 0 means no timeout. */
+  queryTimeoutSec?: number;
+  onChangeQueryTimeout?: (sec: number) => void;
   t: Theme;
 }
+
+// Options for the toolbar timeout picker. 0 = no timeout.
+const TIMEOUT_OPTIONS: { sec: number; label: string }[] = [
+  { sec: 0, label: 'No timeout' },
+  { sec: 10, label: '10s' },
+  { sec: 30, label: '30s' },
+  { sec: 60, label: '1m' },
+  { sec: 300, label: '5m' },
+];
 
 function formatRelative(ts: number, now: number): string {
   const s = Math.max(0, Math.round((now - ts) / 1000));
@@ -82,6 +94,7 @@ export function QueryEditor({
   value, onChange, onRun, isRunning, onExplain, isExplaining = false, queryMode = 'sql', activeSchema, schemaData, runtimeError,
   history = [], onReopenHistory, onDeleteHistoryEntry, onClearHistory,
   savedQueries = [], onSaveQuery, onDeleteSavedQuery, onRenameSavedQuery, onReopenSavedQuery,
+  queryTimeoutSec = 0, onChangeQueryTimeout,
   t,
 }: QueryEditorProps) {
   const isMql = queryMode === 'mql';
@@ -498,6 +511,8 @@ export function QueryEditor({
     explainBtn: { display: 'flex', alignItems: 'center', gap: 6, height: 28, padding: '0 10px', background: t.bgElevated, color: t.textPrimary, border: `1px solid ${t.border}`, borderRadius: 5, fontSize: 12, fontWeight: 500, fontFamily: '"IBM Plex Sans", sans-serif', cursor: 'pointer' } as CSSProperties,
     sep: { width: 1, height: 18, background: t.border, margin: '0 4px' } as CSSProperties,
     schemaPill: { display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: t.textSecondary, fontFamily: 'monospace', background: t.bgElevated, border: `1px solid ${t.border}`, padding: '3px 9px', borderRadius: 4 } as CSSProperties,
+    timeoutPill: { display: 'flex', alignItems: 'center', gap: 4, color: t.textSecondary, background: t.bgElevated, border: `1px solid ${t.border}`, padding: '2px 6px', borderRadius: 4 } as CSSProperties,
+    timeoutSelect: { background: 'transparent', color: t.textSecondary, border: 'none', outline: 'none', fontSize: 11, fontFamily: '"IBM Plex Sans", sans-serif', cursor: 'pointer' } as CSSProperties,
     editorWrap: { flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 } as CSSProperties,
     lineNums: { background: t.bgToolbar, borderRight: `1px solid ${t.borderSubtle}`, padding: '12px 0', minWidth: 40, textAlign: 'right', userSelect: 'none', flexShrink: 0, overflowY: 'hidden' } as CSSProperties,
     lineNum: { padding: '0 10px', fontSize: 11, lineHeight: '21px', color: t.textMuted, fontFamily: '"JetBrains Mono", monospace' } as CSSProperties,
@@ -784,6 +799,26 @@ export function QueryEditor({
         </div>
 
         <div style={{ flex: 1 }}/>
+        {onChangeQueryTimeout && (
+          <label
+            style={s.timeoutPill}
+            data-tooltip={queryTimeoutSec > 0 ? 'Cancel queries that run longer than this' : 'Queries run with no time limit'}
+          >
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2"/><path d="M9 2h6"/>
+            </svg>
+            <select
+              aria-label="Query timeout"
+              value={String(queryTimeoutSec)}
+              onChange={e => onChangeQueryTimeout(Number(e.target.value))}
+              style={s.timeoutSelect}
+            >
+              {TIMEOUT_OPTIONS.map(o => (
+                <option key={o.sec} value={o.sec} style={{ color: t.textPrimary, background: t.bgElevated }}>{o.label}</option>
+              ))}
+            </select>
+          </label>
+        )}
         <span style={s.schemaPill}>
           <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>

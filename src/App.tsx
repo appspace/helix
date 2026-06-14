@@ -65,6 +65,20 @@ function readStoredTheme(): ThemeName {
   }
 }
 
+// Per-query timeout in seconds; 0 means "no timeout". Sent to the server, which
+// cancels an over-running query (KILL QUERY / pg_cancel_backend / maxTimeMS).
+const QUERY_TIMEOUT_KEY = 'helix.queryTimeoutSec';
+const DEFAULT_QUERY_TIMEOUT_SEC = 30;
+
+function readStoredQueryTimeout(): number {
+  try {
+    const v = Number(localStorage.getItem(QUERY_TIMEOUT_KEY));
+    return Number.isFinite(v) && v >= 0 ? v : DEFAULT_QUERY_TIMEOUT_SEC;
+  } catch {
+    return DEFAULT_QUERY_TIMEOUT_SEC;
+  }
+}
+
 export default function App() {
   const [themeName, setThemeName] = useState<ThemeName>(readStoredTheme);
   const t = themeName === 'dark' ? DARK : LIGHT;
@@ -73,6 +87,11 @@ export default function App() {
     document.documentElement.setAttribute('data-theme', themeName);
     try { localStorage.setItem(THEME_KEY, themeName); } catch { /* quota or disabled storage */ }
   }, [themeName]);
+
+  const [queryTimeoutSec, setQueryTimeoutSec] = useState<number>(readStoredQueryTimeout);
+  useEffect(() => {
+    try { localStorage.setItem(QUERY_TIMEOUT_KEY, String(queryTimeoutSec)); } catch { /* quota or disabled storage */ }
+  }, [queryTimeoutSec]);
 
   const [connected, setConnected] = useState(false);
   const [queryMode, setQueryMode] = useState<QueryMode>('sql');
@@ -327,10 +346,11 @@ export default function App() {
     updateTab(targetTab, { isRunning: true, results: null, resultSets: undefined, activeResultIndex: 0, queryError: null, execTime: null, explainPlan: null, explainSql: null, explainError: null });
 
     const started = Date.now();
+    const timeoutMs = queryTimeoutSec > 0 ? queryTimeoutSec * 1000 : undefined;
     try {
       const res = queryMode === 'mql'
-        ? await api.queryMql(mqlPayload, activeSchema)
-        : await api.query(text, activeSchema);
+        ? await api.queryMql(mqlPayload, activeSchema, timeoutMs)
+        : await api.query(text, activeSchema, timeoutMs);
       // The route always emits the legacy fields from the first statement; `results`
       // is the new array (one entry per statement). Old responses without it are
       // synthesised into a single-element array so the rest of the app stays uniform.
@@ -593,6 +613,8 @@ export default function App() {
               onDeleteSavedQuery={handleDeleteSavedQuery}
               onRenameSavedQuery={handleRenameSavedQuery}
               onReopenSavedQuery={handleReopenSavedQuery}
+              queryTimeoutSec={queryTimeoutSec}
+              onChangeQueryTimeout={setQueryTimeoutSec}
               t={t}
             />
           </div>

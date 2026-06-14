@@ -1,6 +1,7 @@
 import mysql from 'mysql2/promise';
 import type { RowDataPacket, FieldPacket, ResultSetHeader } from 'mysql2/promise';
 import type { DbDriver, ConnectionConfig, QueryResult, ColumnMeta, ColumnInfo, SchemaInfo, TableInfo } from './interface.js';
+import { withQueryTimeout } from './timeout.js';
 
 function buildMysqlPoolOptions(config: ConnectionConfig): mysql.PoolOptions {
   return {
@@ -162,14 +163,49 @@ export class MysqlDriver implements DbDriver {
     await this.pool.end();
   }
 
-  async query(sql: string, params?: unknown[], schema?: string): Promise<QueryResult> {
+  /**
+   * `KILL QUERY` aborts the statement running on `threadId` without dropping the
+   * connection. Issued on a separate pooled connection because the one running
+   * the timed-out query is busy. Best-effort: the statement may have already
+   * finished, or no pool slot may be free — the timeout error surfaces either way.
+   */
+  private async killQuery(threadId: number): Promise<void> {
+    let conn: mysql.PoolConnection | undefined;
+    try {
+      conn = await this.pool.getConnection();
+      await conn.query(`KILL QUERY ${threadId}`);
+    } catch {
+      /* best-effort cancel */
+    } finally {
+      conn?.release();
+    }
+  }
+
+  /**
+   * Return `conn` to the pool, but `destroy` it instead when the query timed out:
+   * the `KILL`ed statement is still draining on that socket, and a released
+   * connection could be handed to the next caller mid-interrupt with a stale
+   * result set. mysql2 opens a fresh connection on the next request.
+   */
+  private finishConnection(conn: mysql.PoolConnection, timedOut: boolean): void {
+    if (timedOut) conn.destroy();
+    else conn.release();
+  }
+
+  async query(sql: string, params?: unknown[], schema?: string, timeoutMs?: number): Promise<QueryResult> {
     const conn = await this.pool.getConnection();
+    const threadId = conn.threadId;
+    let timedOut = false;
     try {
       if (schema) {
         await conn.query(`USE \`${schema.replace(/`/g, '')}\``);
       }
 
-      const [rows, fields] = await conn.query(sql, params) as [RowDataPacket[] | ResultSetHeader, FieldPacket[]];
+      const work = conn.query(sql, params) as Promise<[RowDataPacket[] | ResultSetHeader, FieldPacket[]]>;
+      const [rows, fields] = await withQueryTimeout(work, timeoutMs, () => {
+        timedOut = true;
+        if (threadId != null) void this.killQuery(threadId);
+      });
       // With multipleStatements enabled, mysql2 returns arrays-of-arrays when
       // the SQL contains more than one statement. Internal callers (insertRow,
       // updateCell, deleteRow, …) only ever pass single statements, so flatten
@@ -182,20 +218,26 @@ export class MysqlDriver implements DbDriver {
       }
       return buildMysqlResult(rows, fields);
     } finally {
-      conn.release();
+      this.finishConnection(conn, timedOut);
     }
   }
 
-  async queryAll(sql: string, schema?: string): Promise<QueryResult[]> {
+  async queryAll(sql: string, schema?: string, timeoutMs?: number): Promise<QueryResult[]> {
     const conn = await this.pool.getConnection();
+    const threadId = conn.threadId;
+    let timedOut = false;
     try {
       if (schema) {
         await conn.query(`USE \`${schema.replace(/`/g, '')}\``);
       }
-      const [rawRows, rawFields] = await conn.query(sql) as [
+      const work = conn.query(sql) as Promise<[
         RowDataPacket[] | ResultSetHeader | (RowDataPacket[] | ResultSetHeader)[],
         FieldPacket[] | FieldPacket[][],
-      ];
+      ]>;
+      const [rawRows, rawFields] = await withQueryTimeout(work, timeoutMs, () => {
+        timedOut = true;
+        if (threadId != null) void this.killQuery(threadId);
+      });
       // Single statement: mysql2 returns the result directly. Multi-statement: it
       // returns parallel arrays — one rowset and one fields array per statement.
       const isMulti = Array.isArray(rawRows) && rawRows.length > 0 && Array.isArray((rawRows as unknown[])[0]);
@@ -206,7 +248,7 @@ export class MysqlDriver implements DbDriver {
       const fieldSets = rawFields as FieldPacket[][];
       return rowSets.map((r, i) => buildMysqlResult(r, fieldSets[i] ?? []));
     } finally {
-      conn.release();
+      this.finishConnection(conn, timedOut);
     }
   }
 

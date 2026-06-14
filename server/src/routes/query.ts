@@ -4,11 +4,18 @@ import { DriverError } from '../drivers/interface.js';
 
 export const postQuery: RequestHandler = async (req, res) => {
   const driver = getDriver();
-  const { sql, mql, schema } = req.body as {
+  const { sql, mql, schema, timeoutMs: rawTimeout } = req.body as {
     sql?: unknown;
     mql?: unknown;
     schema?: string;
+    timeoutMs?: unknown;
   };
+
+  // A positive, finite number arms the per-query deadline; anything else
+  // (absent, 0, NaN, the client's "no timeout" choice) leaves it disarmed.
+  const timeoutMs = typeof rawTimeout === 'number' && Number.isFinite(rawTimeout) && rawTimeout > 0
+    ? rawTimeout
+    : undefined;
 
   let queryText: string;
 
@@ -47,8 +54,8 @@ export const postQuery: RequestHandler = async (req, res) => {
     // sql-mode drivers expose `queryAll` for multi-statement support; mql-mode
     // payloads are always a single request and use `query`.
     const resultList = driver.queryMode === 'sql' && driver.queryAll
-      ? await driver.queryAll(queryText, schema)
-      : [await driver.query(queryText, [], schema)];
+      ? await driver.queryAll(queryText, schema, timeoutMs)
+      : [await driver.query(queryText, [], schema, timeoutMs)];
     const executionTime = Date.now() - start;
 
     const results = resultList.map(r => ({

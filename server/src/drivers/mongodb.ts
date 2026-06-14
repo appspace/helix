@@ -1,6 +1,7 @@
 import { MongoClient, ObjectId, MongoNetworkError, MongoServerSelectionError, MongoParseError } from 'mongodb';
 import type { Db, Document } from 'mongodb';
 import { DriverError } from './interface.js';
+import { timeoutError } from './timeout.js';
 import type {
   DbDriver,
   ConnectionConfig,
@@ -253,7 +254,15 @@ export class MongoDBDriver implements DbDriver {
     }
   }
 
-  async query(sql: string, _params?: unknown[], schema?: string): Promise<QueryResult> {
+  async query(sql: string, _params?: unknown[], schema?: string, timeoutMs?: number): Promise<QueryResult> {
+    // MongoDB has no out-of-band "kill query" like SQL's KILL/pg_cancel_backend;
+    // `maxTimeMS` is the idiomatic equivalent — the server aborts the operation
+    // itself once the deadline passes. Only the read operations honour it; the
+    // single-document writes return promptly.
+    const maxTimeMS = timeoutMs && timeoutMs > 0 ? timeoutMs : undefined;
+    // Spread into the read operations' options; empty (no `maxTimeMS` key) when
+    // no timeout is armed, so the deadline is opt-in per query.
+    const readOpts = maxTimeMS ? { maxTimeMS } : {};
     try {
       await this.ensureConnected();
       const req = parseRequest(sql);
@@ -262,7 +271,7 @@ export class MongoDBDriver implements DbDriver {
 
       switch (req.operation) {
         case 'find': {
-          let cursor = coll.find(req.filter ?? {});
+          let cursor = coll.find(req.filter ?? {}, readOpts);
           if (req.projection) cursor = cursor.project(req.projection) as typeof cursor;
           if (req.sort) cursor = cursor.sort(req.sort);
           if (typeof req.skip === 'number') cursor = cursor.skip(req.skip);
@@ -274,15 +283,16 @@ export class MongoDBDriver implements DbDriver {
           const doc = await coll.findOne(req.filter ?? {}, {
             projection: req.projection,
             sort: req.sort as Document | undefined,
+            ...readOpts,
           });
           return this.toQueryResult(doc ? [doc] : []);
         }
         case 'aggregate': {
-          const docs = await coll.aggregate(req.pipeline ?? []).toArray();
+          const docs = await coll.aggregate(req.pipeline ?? [], readOpts).toArray();
           return this.toQueryResult(docs);
         }
         case 'count': {
-          const n = await coll.countDocuments(req.filter ?? {});
+          const n = await coll.countDocuments(req.filter ?? {}, readOpts);
           return {
             rows: [{ count: n }],
             columnMeta: [
@@ -343,6 +353,11 @@ export class MongoDBDriver implements DbDriver {
       }
     } catch (err) {
       if (err instanceof DriverError) throw err;
+      // MaxTimeMSExpired (code 50) means our deadline fired server-side; surface
+      // it with the same wording the SQL drivers use for a timed-out query.
+      if (maxTimeMS && (err as { code?: number }).code === 50) {
+        throw timeoutError(maxTimeMS, err);
+      }
       throw classifyMongoError(err);
     }
   }
