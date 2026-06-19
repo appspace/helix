@@ -12,6 +12,11 @@ const MAX_ROW_LIMIT = 10_000;
 const READ_KEYWORDS = new Set(['SELECT', 'SHOW', 'DESCRIBE', 'DESC', 'EXPLAIN', 'WITH']);
 const WRITE_KEYWORDS = new Set(['INSERT', 'UPDATE', 'DELETE', 'REPLACE']);
 
+// Tool names grouped by database family, reused in guard messages and connection_info.
+const SQL_TOOLS = 'execute_query, execute_write, list_tables, describe_table';
+const MONGO_READ_TOOLS = 'find_documents, aggregate_documents, count_documents, list_collections, describe_collection';
+const MONGO_WRITE_TOOLS = 'insert_document, update_document, delete_document';
+
 function firstKeyword(sql: string): string {
   const stripped = sql.replace(/\/\*[\s\S]*?\*\//g, '').replace(/--.*$/gm, '').trimStart();
   const match = stripped.match(/^([A-Za-z]+)/);
@@ -33,6 +38,75 @@ function requireConnection(): string | null {
   return null;
 }
 
+/**
+ * Guard a tool to the query language of the connected database.
+ *
+ * The tool list is intentionally invariant across connections — every tool is
+ * always advertised — so a client that cached `tools/list` never ends up with a
+ * stale set when the user connects or switches databases mid-session. Instead,
+ * a tool from the wrong family returns this actionable message at call time,
+ * naming the connected DB type and the tools that actually apply, so the agent
+ * can self-correct (or ask the user to reconnect) instead of seeing a cryptic
+ * "tool not found". Caller must have already passed requireConnection().
+ */
+function requireMode(expected: 'sql' | 'mql'): string | null {
+  if (getDriver().queryMode === expected) return null;
+  if (expected === 'sql') {
+    // A SQL tool was invoked, but the live connection is MongoDB.
+    return (
+      'This MCP connection is a MongoDB database, so the SQL tools do not apply here. ' +
+      `Use the MongoDB tools instead — reads: ${MONGO_READ_TOOLS}; writes: ${MONGO_WRITE_TOOLS}. ` +
+      'Call connection_info to confirm the connected database; if your client cached an older ' +
+      'tool list, re-list tools or reconnect the MCP server.'
+    );
+  }
+  // A MongoDB tool was invoked, but the live connection is SQL.
+  const dbType = getActiveConfig()?.type ?? 'SQL';
+  return (
+    `This MCP connection is a ${dbType} (SQL) database, so the MongoDB tools do not apply here. ` +
+    `Use the SQL tools instead: ${SQL_TOOLS}. ` +
+    'Call connection_info to confirm the connected database; if your client cached an older ' +
+    'tool list, re-list tools or reconnect the MCP server.'
+  );
+}
+
+// ---------------------------------------------------------------------------
+// connection_info — always available, regardless of database family.
+// ---------------------------------------------------------------------------
+
+function registerConnectionInfo(server: McpServer): void {
+  server.registerTool(
+    'connection_info',
+    {
+      description:
+        'Report the database the MCP server is currently connected to: its type, query language, ' +
+        'and which tools to use. Call this first to decide between the SQL and MongoDB tools, and ' +
+        'again whenever a tool reports a database-type mismatch (the connection can change mid-session).',
+      inputSchema: {},
+    },
+    async () => {
+      if (!isConnected()) {
+        return toolJson({
+          connected: false,
+          message: 'No database is connected. Ask the user to connect one via the Helix UI.',
+        });
+      }
+      const isMongo = getDriver().queryMode === 'mql';
+      const cfg = getActiveConfig();
+      return toolJson({
+        connected: true,
+        databaseType: cfg?.type ?? 'unknown',
+        database: cfg?.database ?? null,
+        queryLanguage: isMongo ? 'MongoDB (MQL)' : 'SQL',
+        writesEnabled: isMcpWritesAllowed(),
+        useTools: isMongo
+          ? { read: MONGO_READ_TOOLS.split(', '), write: MONGO_WRITE_TOOLS.split(', ') }
+          : { read: ['execute_query', 'list_tables', 'describe_table'], write: ['execute_write'] },
+      });
+    },
+  );
+}
+
 // ---------------------------------------------------------------------------
 // SQL tools (MySQL / Postgres — queryMode 'sql')
 // ---------------------------------------------------------------------------
@@ -41,7 +115,7 @@ function registerSqlTools(server: McpServer): void {
   server.registerTool(
     'list_tables',
     {
-      description: 'List tables, views, procedures, and triggers in a schema. If no schema is given, lists schemas (databases).',
+      description: '[SQL databases] List tables, views, procedures, and triggers in a schema. If no schema is given, lists schemas (databases).',
       inputSchema: {
         schema: z.string().optional().describe('Schema/database name. Omit to list available schemas.'),
       },
@@ -49,6 +123,8 @@ function registerSqlTools(server: McpServer): void {
     async ({ schema }) => {
       const err = requireConnection();
       if (err) return toolError(err);
+      const modeErr = requireMode('sql');
+      if (modeErr) return toolError(modeErr);
 
       try {
         const driver = getDriver();
@@ -77,7 +153,7 @@ function registerSqlTools(server: McpServer): void {
   server.registerTool(
     'describe_table',
     {
-      description: 'Describe columns of a table: name, type, nullability, default, primary key, auto-increment.',
+      description: '[SQL databases] Describe columns of a table: name, type, nullability, default, primary key, auto-increment.',
       inputSchema: {
         schema: z.string().describe('Schema/database name.'),
         table: z.string().describe('Table name.'),
@@ -86,6 +162,8 @@ function registerSqlTools(server: McpServer): void {
     async ({ schema, table }) => {
       const err = requireConnection();
       if (err) return toolError(err);
+      const modeErr = requireMode('sql');
+      if (modeErr) return toolError(modeErr);
 
       try {
         const tableInfo = await getDriver().getTable(schema, table);
@@ -103,7 +181,7 @@ function registerSqlTools(server: McpServer): void {
     'execute_query',
     {
       description:
-        'Run a read-only SQL query (SELECT / SHOW / DESCRIBE / EXPLAIN / WITH). ' +
+        '[SQL databases] Run a read-only SQL query (SELECT / SHOW / DESCRIBE / EXPLAIN / WITH). ' +
         `Results are capped at ${DEFAULT_ROW_LIMIT} rows by default; pass "limit" (up to ${MAX_ROW_LIMIT}) to change.`,
       inputSchema: {
         sql: z.string().min(1).describe('Read-only SQL statement.'),
@@ -115,6 +193,8 @@ function registerSqlTools(server: McpServer): void {
     async ({ sql, schema, limit }) => {
       const err = requireConnection();
       if (err) return toolError(err);
+      const modeErr = requireMode('sql');
+      if (modeErr) return toolError(modeErr);
 
       const kw = firstKeyword(sql);
       if (!READ_KEYWORDS.has(kw)) {
@@ -152,7 +232,7 @@ function registerSqlTools(server: McpServer): void {
     'execute_write',
     {
       description:
-        'Run an INSERT, UPDATE, DELETE, or REPLACE statement. ' +
+        '[SQL databases] Run an INSERT, UPDATE, DELETE, or REPLACE statement. ' +
         'Requires the user to have enabled "Allow MCP to modify data" in the Helix UI. ' +
         'DDL (CREATE/DROP/ALTER/TRUNCATE) is not supported.',
       inputSchema: {
@@ -163,6 +243,8 @@ function registerSqlTools(server: McpServer): void {
     async ({ sql, schema }) => {
       const err = requireConnection();
       if (err) return toolError(err);
+      const modeErr = requireMode('sql');
+      if (modeErr) return toolError(modeErr);
 
       if (!isMcpWritesAllowed()) {
         return toolError(
@@ -216,7 +298,7 @@ function registerMongoTools(server: McpServer): void {
     'list_collections',
     {
       description:
-        'List collections (and views) in a MongoDB database. ' +
+        '[MongoDB] List collections (and views) in a database. ' +
         'If no database is given, lists the available databases.',
       inputSchema: {
         schema: z.string().optional().describe('Database name. Omit to list available databases.'),
@@ -225,6 +307,8 @@ function registerMongoTools(server: McpServer): void {
     async ({ schema }) => {
       const err = requireConnection();
       if (err) return toolError(err);
+      const modeErr = requireMode('mql');
+      if (modeErr) return toolError(modeErr);
 
       try {
         const driver = getDriver();
@@ -248,7 +332,7 @@ function registerMongoTools(server: McpServer): void {
     'describe_collection',
     {
       description:
-        'Describe a MongoDB collection: field names and types inferred from a sample of documents ' +
+        '[MongoDB] Describe a collection: field names and types inferred from a sample of documents ' +
         '(schemaless — fields may vary per document), plus its indexes and JSON Schema validator if set.',
       inputSchema: {
         schema: z.string().describe('Database name.'),
@@ -258,6 +342,8 @@ function registerMongoTools(server: McpServer): void {
     async ({ schema, collection }) => {
       const err = requireConnection();
       if (err) return toolError(err);
+      const modeErr = requireMode('mql');
+      if (modeErr) return toolError(modeErr);
 
       try {
         const driver = getDriver();
@@ -286,7 +372,7 @@ function registerMongoTools(server: McpServer): void {
     'find_documents',
     {
       description:
-        'Find documents in a MongoDB collection (db.collection.find). ' +
+        '[MongoDB] Find documents in a collection (db.collection.find). ' +
         `Returns up to ${DEFAULT_ROW_LIMIT} documents by default; pass "limit" (up to ${MAX_ROW_LIMIT}) to change. ` +
         'Note: a string "_id" filter is matched literally and will not match an ObjectId — omit it or filter on other fields.',
       inputSchema: {
@@ -303,6 +389,8 @@ function registerMongoTools(server: McpServer): void {
     async ({ collection, filter, projection, sort, limit, skip, schema }) => {
       const err = requireConnection();
       if (err) return toolError(err);
+      const modeErr = requireMode('mql');
+      if (modeErr) return toolError(modeErr);
 
       const cap = limit ?? DEFAULT_ROW_LIMIT;
       try {
@@ -329,7 +417,7 @@ function registerMongoTools(server: McpServer): void {
     'aggregate_documents',
     {
       description:
-        'Run an aggregation pipeline on a MongoDB collection (db.collection.aggregate). ' +
+        '[MongoDB] Run an aggregation pipeline on a collection (db.collection.aggregate). ' +
         `Results are capped at ${DEFAULT_ROW_LIMIT} documents by default; pass "limit" (up to ${MAX_ROW_LIMIT}) to change. ` +
         'For large pipelines, add an explicit {"$limit": N} stage to bound work server-side.',
       inputSchema: {
@@ -343,6 +431,8 @@ function registerMongoTools(server: McpServer): void {
     async ({ collection, pipeline, limit, schema }) => {
       const err = requireConnection();
       if (err) return toolError(err);
+      const modeErr = requireMode('mql');
+      if (modeErr) return toolError(modeErr);
 
       const cap = limit ?? DEFAULT_ROW_LIMIT;
       try {
@@ -369,7 +459,7 @@ function registerMongoTools(server: McpServer): void {
   server.registerTool(
     'count_documents',
     {
-      description: 'Count documents matching a filter in a MongoDB collection (db.collection.countDocuments).',
+      description: '[MongoDB] Count documents matching a filter in a collection (db.collection.countDocuments).',
       inputSchema: {
         collection: z.string().describe('Collection name.'),
         filter: docSchema.optional().describe('MongoDB query filter. Omit to count all documents.'),
@@ -379,6 +469,8 @@ function registerMongoTools(server: McpServer): void {
     async ({ collection, filter, schema }) => {
       const err = requireConnection();
       if (err) return toolError(err);
+      const modeErr = requireMode('mql');
+      if (modeErr) return toolError(modeErr);
 
       try {
         const start = Date.now();
@@ -395,7 +487,7 @@ function registerMongoTools(server: McpServer): void {
     'insert_document',
     {
       description:
-        'Insert a single document into a MongoDB collection (db.collection.insertOne). ' +
+        '[MongoDB] Insert a single document into a collection (db.collection.insertOne). ' +
         'Requires the user to have enabled "Allow MCP to modify data" in the Helix UI.',
       inputSchema: {
         collection: z.string().describe('Collection name.'),
@@ -406,6 +498,8 @@ function registerMongoTools(server: McpServer): void {
     async ({ collection, document, schema }) => {
       const err = requireConnection();
       if (err) return toolError(err);
+      const modeErr = requireMode('mql');
+      if (modeErr) return toolError(modeErr);
       if (!isMcpWritesAllowed()) {
         return toolError(
           'Writes are disabled. Ask the user to enable "Allow MCP to modify data" in the Helix UI (top-right menu).',
@@ -427,7 +521,7 @@ function registerMongoTools(server: McpServer): void {
     'update_document',
     {
       description:
-        'Update a single document in a MongoDB collection (db.collection.updateOne). ' +
+        '[MongoDB] Update a single document in a collection (db.collection.updateOne). ' +
         'Provide either "filter" or "id" to select the document, and "update" with operators like {"$set": {...}}. ' +
         'Requires the user to have enabled "Allow MCP to modify data" in the Helix UI.',
       inputSchema: {
@@ -441,6 +535,8 @@ function registerMongoTools(server: McpServer): void {
     async ({ collection, update, filter, id, schema }) => {
       const err = requireConnection();
       if (err) return toolError(err);
+      const modeErr = requireMode('mql');
+      if (modeErr) return toolError(modeErr);
       if (!isMcpWritesAllowed()) {
         return toolError(
           'Writes are disabled. Ask the user to enable "Allow MCP to modify data" in the Helix UI (top-right menu).',
@@ -465,7 +561,7 @@ function registerMongoTools(server: McpServer): void {
     'delete_document',
     {
       description:
-        'Delete a single document from a MongoDB collection (db.collection.deleteOne). ' +
+        '[MongoDB] Delete a single document from a collection (db.collection.deleteOne). ' +
         'Provide either "filter" or "id" to select the document. ' +
         'Requires the user to have enabled "Allow MCP to modify data" in the Helix UI.',
       inputSchema: {
@@ -478,6 +574,8 @@ function registerMongoTools(server: McpServer): void {
     async ({ collection, filter, id, schema }) => {
       const err = requireConnection();
       if (err) return toolError(err);
+      const modeErr = requireMode('mql');
+      if (modeErr) return toolError(modeErr);
       if (!isMcpWritesAllowed()) {
         return toolError(
           'Writes are disabled. Ask the user to enable "Allow MCP to modify data" in the Helix UI (top-right menu).',
@@ -504,53 +602,51 @@ function registerMongoTools(server: McpServer): void {
 // ---------------------------------------------------------------------------
 
 /**
- * The active query language for the connected database. Defaults to 'sql' when
- * nothing is connected so the (backward-compatible) SQL toolset is advertised.
- * The transport is stateless, so `tools/list` is re-evaluated on every request
- * and always reflects the database connected at that moment.
+ * Build the server instructions. The tool list is invariant — both the SQL and
+ * MongoDB tools are always advertised — so the instructions explain that each
+ * family only works against its database type, point at connection_info, and
+ * name the database connected right now (which can change during a session).
  */
-function activeQueryMode(): 'sql' | 'mql' {
-  return isConnected() ? getDriver().queryMode : 'sql';
-}
-
-function buildInstructions(mode: 'sql' | 'mql'): string {
+function buildInstructions(): string {
+  const connected = isConnected();
   const cfg = getActiveConfig();
-  const dbType = cfg?.type ?? 'none';
-  const base = [
+  const lines = [
     'Helix MCP exposes the database currently connected in the Helix UI.',
-    `The connected database is ${isConnected() ? `a ${dbType} database` : 'not connected yet'}.`,
+    'The same tools are always listed, but each only works against its database family: ' +
+      `the SQL tools (${SQL_TOOLS}) require a SQL database, and the MongoDB tools ` +
+      `(${MONGO_READ_TOOLS}, ${MONGO_WRITE_TOOLS}) require a MongoDB database.`,
+    'Call connection_info first to learn which database is connected and which tools to use. ' +
+      'The connection can change during a session, so re-check connection_info if a tool reports ' +
+      'a database-type mismatch.',
   ];
-  if (mode === 'mql') {
-    base.push(
-      'This is a MongoDB (document) database — use the MongoDB tools (find_documents, aggregate_documents, count_documents, ...).',
-      'Do NOT write SQL: there are no SELECT/SHOW statements here, only collections and documents.',
-      'Writes (insert/update/delete) are only allowed when the user has enabled "Allow MCP to modify data" in the Helix UI top-right menu.',
+  if (connected) {
+    const isMongo = getDriver().queryMode === 'mql';
+    lines.push(
+      `Currently connected: a ${cfg?.type ?? 'unknown'} database — ` +
+        `${isMongo ? 'use the MongoDB tools' : 'use the SQL tools'}.`,
     );
   } else {
-    base.push(
-      'This is a SQL database — use SQL via execute_query (reads) and execute_write (writes).',
-      'Writes (INSERT/UPDATE/DELETE/REPLACE) are only allowed when the user has enabled "Allow MCP to modify data" in the Helix UI top-right menu.',
-      'DDL (CREATE/DROP/ALTER/TRUNCATE/RENAME) is not supported in this version.',
-    );
+    lines.push('Currently no database is connected.');
   }
-  return base.join(' ');
+  lines.push(
+    'Writes are only allowed when the user has enabled "Allow MCP to modify data" in the Helix UI ' +
+      'top-right menu. DDL (CREATE/DROP/ALTER/TRUNCATE/RENAME) is not supported.',
+  );
+  return lines.join(' ');
 }
 
 export function buildMcpServer(): McpServer {
-  const mode = activeQueryMode();
   const server = new McpServer(
     { name: 'helix-mcp', version: '0.1.0' },
     {
       capabilities: { tools: {} },
-      instructions: buildInstructions(mode),
+      instructions: buildInstructions(),
     },
   );
 
-  if (mode === 'mql') {
-    registerMongoTools(server);
-  } else {
-    registerSqlTools(server);
-  }
+  registerConnectionInfo(server);
+  registerSqlTools(server);
+  registerMongoTools(server);
 
   return server;
 }

@@ -36,7 +36,13 @@ function mockMongoDriver(query = vi.fn()) {
   return driver;
 }
 
-describe('MCP server – driver-aware toolset', () => {
+function mockSqlDriver(query = vi.fn()) {
+  const driver = { queryMode: 'sql' as const, query };
+  vi.mocked(getDriver).mockReturnValue(driver as any);
+  return driver;
+}
+
+describe('MCP server – invariant toolset with per-call mode guards', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(isConnected).mockReturnValue(true);
@@ -44,37 +50,81 @@ describe('MCP server – driver-aware toolset', () => {
     vi.mocked(isMcpWritesAllowed).mockReturnValue(false);
   });
 
-  it('exposes MongoDB tools (not SQL tools) on a Mongo connection', async () => {
+  it('advertises the same full toolset regardless of connected DB (no stale-cache problem)', async () => {
+    // Mongo connection
+    mockMongoDriver();
+    const mongoNames = (await connectClient()).client.listTools().then(r => r.tools.map(t => t.name).sort());
+    // SQL connection
+    vi.mocked(getActiveConfig).mockReturnValue({ type: 'postgres', database: 'shop' } as any);
+    mockSqlDriver();
+    const sqlNames = (await connectClient()).client.listTools().then(r => r.tools.map(t => t.name).sort());
+
+    const expected = [
+      'aggregate_documents', 'connection_info', 'count_documents', 'delete_document',
+      'describe_collection', 'describe_table', 'execute_query', 'execute_write',
+      'find_documents', 'insert_document', 'list_collections', 'list_tables', 'update_document',
+    ];
+    expect(await mongoNames).toEqual(expected);
+    expect(await sqlNames).toEqual(expected);
+  });
+
+  it('connection_info reports the connected database type and which tools to use', async () => {
     mockMongoDriver();
     const { client } = await connectClient();
-    const names = (await client.listTools()).tools.map(t => t.name).sort();
+    const res: any = await client.callTool({ name: 'connection_info', arguments: {} });
+    const info = JSON.parse(res.content[0].text);
 
-    expect(names).toContain('find_documents');
-    expect(names).toContain('aggregate_documents');
-    expect(names).toContain('count_documents');
-    expect(names).toContain('list_collections');
-    expect(names).not.toContain('execute_query');
-    expect(names).not.toContain('execute_write');
+    expect(info).toMatchObject({
+      connected: true,
+      databaseType: 'mongodb',
+      queryLanguage: 'MongoDB (MQL)',
+    });
+    expect(info.useTools.read).toContain('find_documents');
   });
 
-  it('exposes SQL tools on a SQL connection', async () => {
-    vi.mocked(getActiveConfig).mockReturnValue({ type: 'postgres', database: 'shop' } as any);
-    vi.mocked(getDriver).mockReturnValue({ queryMode: 'sql' } as any);
+  it('a SQL tool on a Mongo connection returns an actionable mismatch error, not "tool not found"', async () => {
+    const query = vi.fn();
+    mockMongoDriver(query);
     const { client } = await connectClient();
-    const names = (await client.listTools()).tools.map(t => t.name).sort();
 
-    expect(names).toContain('execute_query');
-    expect(names).toContain('execute_write');
-    expect(names).not.toContain('find_documents');
+    const res: any = await client.callTool({
+      name: 'execute_query',
+      arguments: { sql: 'SELECT 1' },
+    });
+
+    expect(res.isError).toBe(true);
+    const text = res.content[0].text;
+    expect(text).toMatch(/MongoDB database/);
+    expect(text).toMatch(/find_documents/);
+    expect(text).toMatch(/connection_info/);
+    expect(query).not.toHaveBeenCalled();
   });
 
-  it('server instructions tell the model it is MongoDB and not to write SQL', async () => {
+  it('a MongoDB tool on a SQL connection returns an actionable mismatch error', async () => {
+    vi.mocked(getActiveConfig).mockReturnValue({ type: 'postgres', database: 'shop' } as any);
+    const query = vi.fn();
+    mockSqlDriver(query);
+    const { client } = await connectClient();
+
+    const res: any = await client.callTool({
+      name: 'find_documents',
+      arguments: { collection: 'users' },
+    });
+
+    expect(res.isError).toBe(true);
+    const text = res.content[0].text;
+    expect(text).toMatch(/postgres \(SQL\) database/);
+    expect(text).toMatch(/execute_query/);
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('server instructions name the connected DB and point at connection_info', async () => {
     mockMongoDriver();
     const { client } = await connectClient();
     const instructions = client.getInstructions() ?? '';
 
-    expect(instructions).toMatch(/mongodb/i);
-    expect(instructions).toMatch(/do not write sql/i);
+    expect(instructions).toMatch(/connection_info/);
+    expect(instructions).toMatch(/mongodb database/i);
   });
 
   it('find_documents assembles a JSON-encoded MQL request for the driver', async () => {
