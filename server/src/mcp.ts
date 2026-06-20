@@ -351,9 +351,7 @@ function registerMongoTools(server: McpServer): void {
         if (!info) {
           return toolError(`Collection "${schema}"."${collection}" not found.`);
         }
-        const collInfo = driver.getCollectionInfo
-          ? await driver.getCollectionInfo(schema, collection)
-          : null;
+        const collInfo = await driver.getCollectionInfo?.(schema, collection) ?? null;
         return toolJson({
           database: schema,
           collection,
@@ -437,16 +435,22 @@ function registerMongoTools(server: McpServer): void {
       const cap = limit ?? DEFAULT_ROW_LIMIT;
       try {
         const start = Date.now();
-        const result = await runMql({ collection, operation: 'aggregate', pipeline }, schema);
+        // Bound work server-side instead of fetching the whole result and
+        // slicing in Node. Fetching one doc past the cap lets us still report
+        // truncation without loading a potentially huge result set into memory,
+        // mirroring how find_documents forwards its limit to the driver.
+        const result = await runMql(
+          { collection, operation: 'aggregate', pipeline: [...pipeline, { $limit: cap + 1 }] },
+          schema,
+        );
         const executionTime = Date.now() - start;
-        const totalRows = result.rows.length;
-        const capped = result.rows.slice(0, cap);
+        const truncated = result.rows.length > cap;
+        const documents = truncated ? result.rows.slice(0, cap) : result.rows;
         return toolJson({
           fields: result.columnMeta.map(c => c.name),
-          documents: capped,
-          docCount: capped.length,
-          totalDocs: totalRows,
-          truncated: totalRows > capped.length,
+          documents,
+          docCount: documents.length,
+          truncated,
           limitApplied: cap,
           executionTime,
         });
