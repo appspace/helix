@@ -82,7 +82,9 @@ export function TopBar({ tabs, activeTab, onTabChange, onNewTab, onCloseTab, con
         borderRight: `1px solid ${t.borderSubtle}`, alignSelf: 'stretch', flexShrink: 0,
       };
   const tabsWrap: CSSProperties = { display: 'flex', alignItems: 'stretch', flex: 1, minWidth: 0, overflow: 'hidden', alignSelf: 'stretch' };
-  const tabsScroll: CSSProperties = { display: 'flex', alignItems: 'stretch', flex: 1, minWidth: 0, overflowX: 'auto', overflowY: 'hidden', alignSelf: 'stretch' };
+  // Shrink to content (but shrinkable when tabs overflow, so scrolling still works)
+  // instead of flex:1 — this frees the space after the last tab to act as a drag region.
+  const tabsScroll: CSSProperties = { display: 'flex', alignItems: 'stretch', flex: '0 1 auto', minWidth: 0, overflowX: 'auto', overflowY: 'hidden', alignSelf: 'stretch' };
   const tabBase: CSSProperties = {
     display: 'flex', alignItems: 'center', gap: 6, padding: '0 10px 0 12px',
     fontSize: 12, color: t.textMuted, cursor: 'pointer',
@@ -133,6 +135,9 @@ export function TopBar({ tabs, activeTab, onTabChange, onNewTab, onCloseTab, con
             </div>
           ))}
         </div>
+        {/* Flexible drag region: fills the empty space after the last tab so the
+            window can be grabbed here, while keeping the + button at the right edge. */}
+        <div style={{ flex: 1, minWidth: 12, alignSelf: 'stretch' }} />
         <button
           style={{ background: 'none', border: 'none', padding: '0 10px', cursor: 'pointer', color: t.textMuted, display: 'flex', alignItems: 'center', alignSelf: 'stretch', flexShrink: 0, transition: 'color 150ms ease' }}
           onClick={onNewTab}
