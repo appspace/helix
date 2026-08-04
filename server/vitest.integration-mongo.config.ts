@@ -7,7 +7,9 @@ export default defineConfig({
     globalSetup: './src/test-setup/global-setup-mongo.ts',
     testTimeout: 15000,
     hookTimeout: 15000,
+    // vitest 4 removed poolOptions.forks.singleFork; these replace it.
     pool: 'forks',
-    poolOptions: { forks: { singleFork: true } },
+    fileParallelism: false,
+    maxWorkers: 1,
   },
 });

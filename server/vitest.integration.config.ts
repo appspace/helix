@@ -8,8 +8,10 @@ export default defineConfig({
     testTimeout: 15000,
     hookTimeout: 15000,
     // Run all tests in one process to share module-level state (app, raw conn)
-    // and prevent concurrent writes from racing between tests.
+    // and prevent concurrent writes from racing between tests. vitest 4 removed
+    // poolOptions.forks.singleFork; these two top-level options replace it.
     pool: 'forks',
-    poolOptions: { forks: { singleFork: true } },
+    fileParallelism: false,
+    maxWorkers: 1,
   },
 });

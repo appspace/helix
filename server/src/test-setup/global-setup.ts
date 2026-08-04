@@ -5,7 +5,10 @@ const POLL_MS = 500;
 
 const config = {
   host: process.env['MYSQL_HOST'] ?? 'localhost',
-  port: Number(process.env['MYSQL_PORT'] ?? 3307),
+  // 13306 is the throwaway mysql-test container in docker-compose.yml. Keep these
+  // in sync: setup() below runs DROP DATABASE, and common local ports (3306, and
+  // tunnel ports like 3307) may point at a real database someone cares about.
+  port: Number(process.env['MYSQL_PORT'] ?? 13306),
   user: process.env['MYSQL_USER'] ?? 'root',
   password: process.env['MYSQL_PASSWORD'] ?? 'root',
   multipleStatements: true,
