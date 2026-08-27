@@ -1,6 +1,6 @@
 import pg from 'pg';
 import { DriverError } from './interface.js';
-import type { DbDriver, ConnectionConfig, QueryResult, ColumnMeta, ColumnInfo, SchemaInfo, TableInfo } from './interface.js';
+import type { DbDriver, ConnectionConfig, QueryResult, ColumnMeta, ColumnInfo, IndexInfo, SchemaInfo, TableInfo } from './interface.js';
 
 // Return DATE / TIME / TIMESTAMP / TIMESTAMPTZ / TIMETZ as raw strings rather
 // than JS Dates. pg's default parsers route through `new Date(...)`, which
@@ -92,6 +92,53 @@ function buildPgResult(result: pg.QueryResult): QueryResult {
     return out;
   });
   return { rows: serializedRows, columnMeta };
+}
+
+// pg_index.indkey is an ordered vector of column numbers, so unnesting it WITH
+// ORDINALITY is what preserves index order — information_schema has no
+// equivalent view for indexes. The int2[] cast is explicit because unnest has
+// no int2vector overload of its own. attnum 0 marks an expression part of a
+// functional index; those join to no pg_attribute row and come back NULL.
+// Trailing INCLUDE columns (PG 11+) are listed too: they are part of the index
+// even though they can't drive a lookup, and their position after the key
+// columns already marks them as non-leading.
+const PG_INDEX_SQL = `
+  SELECT c.relname AS tbl,
+         i.relname AS idx,
+         ix.indisunique AS is_unique,
+         am.amname AS idx_type,
+         a.attname AS col
+  FROM pg_index ix
+  JOIN pg_class c ON c.oid = ix.indrelid
+  JOIN pg_class i ON i.oid = ix.indexrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  JOIN pg_am am ON am.oid = i.relam
+  CROSS JOIN LATERAL unnest(ix.indkey::int2[]) WITH ORDINALITY AS k(attnum, ord)
+  LEFT JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = k.attnum
+  WHERE n.nspname = $1`;
+
+interface PgIndexRow {
+  tbl: string;
+  idx: string;
+  is_unique: boolean;
+  idx_type: string;
+  col: string | null;
+}
+
+/** Fold the one-row-per-(index, column) result of `PG_INDEX_SQL` into one `IndexInfo` per index, keyed by table. */
+function groupPgIndexes(rows: PgIndexRow[]): Map<string, IndexInfo[]> {
+  const byTable = new Map<string, IndexInfo[]>();
+  for (const row of rows) {
+    if (!byTable.has(row.tbl)) byTable.set(row.tbl, []);
+    const list = byTable.get(row.tbl)!;
+    let idx = list.find(i => i.name === row.idx);
+    if (!idx) {
+      idx = { name: row.idx, unique: row.is_unique, columns: [], type: row.idx_type ?? '' };
+      list.push(idx);
+    }
+    idx.columns.push(row.col ?? '(expression)');
+  }
+  return byTable;
 }
 
 export class PostgresDriver implements DbDriver {
@@ -259,6 +306,11 @@ export class PostgresDriver implements DbDriver {
          ORDER BY c.table_name, c.ordinal_position`,
         [schema],
       );
+      const indexesRes = await client.query<PgIndexRow>(
+        `${PG_INDEX_SQL}
+         ORDER BY c.relname, i.relname, k.ord`,
+        [schema],
+      );
       const viewsRes = await client.query<{ name: string }>(
         `SELECT table_name AS name FROM information_schema.views
          WHERE table_schema = $1 ORDER BY table_name`,
@@ -292,12 +344,15 @@ export class PostgresDriver implements DbDriver {
         });
       }
 
+      const indexesByTable = groupPgIndexes(indexesRes.rows);
+
       return {
         tables: tablesRes.rows.map(t => ({
           name: t.name,
           rows: Number(t.row_count),
           comment: '',
           columns: colsByTable.get(t.name) ?? [],
+          indexes: indexesByTable.get(t.name) ?? [],
         })),
         views: viewsRes.rows.map(v => v.name),
         procedures: procsRes.rows.map(p => p.name),
@@ -350,6 +405,12 @@ export class PostgresDriver implements DbDriver {
         [schema, table],
       );
 
+      const indexesRes = await client.query<PgIndexRow>(
+        `${PG_INDEX_SQL} AND c.relname = $2
+         ORDER BY i.relname, k.ord`,
+        [schema, table],
+      );
+
       const cols: ColumnInfo[] = colsRes.rows.map(r => ({
         name: r.col,
         type: r.col_type,
@@ -366,6 +427,7 @@ export class PostgresDriver implements DbDriver {
         rows: Number(tableRes.rows[0].row_count),
         comment: '',
         columns: cols,
+        indexes: groupPgIndexes(indexesRes.rows).get(table) ?? [],
       };
     } finally {
       client.release();

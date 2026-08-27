@@ -50,6 +50,8 @@ export async function setup() {
       );
 
       CREATE INDEX idx_orders_user_id ON orders(user_id);
+      -- Composite index: index-order coverage for the column index marks.
+      CREATE INDEX idx_orders_user_created ON orders(user_id, created_at);
     `);
   } finally {
     await client.end();

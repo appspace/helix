@@ -235,3 +235,82 @@ describe('PostgresDriver – date/time type parsers', () => {
     }
   });
 });
+
+describe('PostgresDriver – index metadata', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockPoolInstance.connect.mockResolvedValue(mockClient);
+  });
+
+  // One row per (index, column) pair, ordered by index position — the shape
+  // `unnest(indkey) WITH ORDINALITY` produces.
+  const INDEX_ROWS = [
+    { tbl: 'orders', idx: 'orders_pkey', is_unique: true, idx_type: 'btree', col: 'id' },
+    { tbl: 'orders', idx: 'orders_tenant_created_idx', is_unique: false, idx_type: 'btree', col: 'tenant_id' },
+    { tbl: 'orders', idx: 'orders_tenant_created_idx', is_unique: false, idx_type: 'btree', col: 'created_at' },
+    { tbl: 'users', idx: 'users_email_key', is_unique: true, idx_type: 'btree', col: 'email' },
+  ];
+
+  // getSchema queries sequentially: tables, columns, indexes, views, routines, triggers.
+  function stubGetSchema(indexRows: Record<string, unknown>[]) {
+    mockClient.query
+      .mockResolvedValueOnce({ rows: [{ name: 'orders', row_count: '3' }, { name: 'users', row_count: '1' }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: indexRows })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+  }
+
+  it('folds pg_index rows into one index per name, keyed by table', async () => {
+    stubGetSchema(INDEX_ROWS);
+    const info = await makeDriver().getSchema('public');
+
+    expect(info.tables.find(t => t.name === 'orders')!.indexes).toEqual([
+      { name: 'orders_pkey', unique: true, columns: ['id'], type: 'btree' },
+      { name: 'orders_tenant_created_idx', unique: false, columns: ['tenant_id', 'created_at'], type: 'btree' },
+    ]);
+    expect(info.tables.find(t => t.name === 'users')!.indexes).toEqual([
+      { name: 'users_email_key', unique: true, columns: ['email'], type: 'btree' },
+    ]);
+  });
+
+  it('unnests indkey with ordinality so column order survives', async () => {
+    stubGetSchema([]);
+    await makeDriver().getSchema('public');
+    const indexSql = mockClient.query.mock.calls[2][0] as string;
+    expect(indexSql).toContain('unnest(ix.indkey::int2[]) WITH ORDINALITY');
+    expect(indexSql).toContain('ORDER BY c.relname, i.relname, k.ord');
+  });
+
+  it('renders expression index parts (attnum 0, no pg_attribute row) as (expression)', async () => {
+    stubGetSchema([
+      { tbl: 'orders', idx: 'orders_lower_ref_idx', is_unique: false, idx_type: 'btree', col: null },
+    ]);
+    const info = await makeDriver().getSchema('public');
+    expect(info.tables.find(t => t.name === 'orders')!.indexes[0].columns).toEqual(['(expression)']);
+  });
+
+  it('reports the access method for non-btree indexes', async () => {
+    stubGetSchema([
+      { tbl: 'orders', idx: 'orders_tags_idx', is_unique: false, idx_type: 'gin', col: 'tags' },
+    ]);
+    const info = await makeDriver().getSchema('public');
+    expect(info.tables.find(t => t.name === 'orders')!.indexes[0].type).toBe('gin');
+  });
+
+  it('leaves tables with no indexes as an empty list', async () => {
+    stubGetSchema([]);
+    const info = await makeDriver().getSchema('public');
+    expect(info.tables.map(t => t.indexes)).toEqual([[], []]);
+  });
+
+  it('getTable returns the indexes of that table only', async () => {
+    mockClient.query
+      .mockResolvedValueOnce({ rows: [{ name: 'orders', row_count: '3' }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: INDEX_ROWS.filter(r => r.tbl === 'orders') });
+    const table = await makeDriver().getTable('public', 'orders');
+    expect(table!.indexes.map(i => i.name)).toEqual(['orders_pkey', 'orders_tenant_created_idx']);
+  });
+});

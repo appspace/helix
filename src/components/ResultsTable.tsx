@@ -6,6 +6,8 @@ import { InsertRowDialog } from './InsertRowDialog';
 import { ExplainPlan } from './ExplainPlan';
 import { rowsToCsv, rowsToJson, downloadBlob, sanitizeFilename } from '../export';
 import { formatSqlValue } from '../lib/sql';
+import { indexMarkFor, describeIndexMark } from '../lib/indexes';
+import type { IndexMark } from '../lib/indexes';
 
 // MongoDB documents arrive with nested objects/arrays in cell values.
 // Other drivers always emit primitives. We type the row map permissively so
@@ -98,6 +100,26 @@ function commentFor(schemaData: SchemaData | undefined, meta: ColumnMeta | undef
   const table = schemaData.tables.find(x => x.name === meta.orgTable);
   const col = table?.columns.find(c => c.name === meta.orgName);
   return col?.comment || undefined;
+}
+
+/**
+ * Key glyph marking an indexed column in the results header. Accent-coloured
+ * when the column leads an index (a filter on it alone can use one), muted and
+ * thinner when it only sits deeper inside a composite index — see `indexMarkFor`.
+ */
+function IndexMarkIcon({ kind, color }: { kind: IndexMark['kind']; color: string }) {
+  const leading = kind === 'leading';
+  return (
+    <svg
+      width="11" height="11" viewBox="0 0 16 16" fill="none" stroke={color}
+      strokeWidth={leading ? 1.8 : 1.4} strokeLinecap="round" strokeLinejoin="round"
+      style={{ flex: '0 0 auto' }} aria-hidden="true"
+    >
+      <circle cx="5" cy="11" r="3" />
+      <path d="M7.1 8.9L14 2" />
+      <path d="M10.5 5.5L12.5 7.5" />
+    </svg>
+  );
 }
 
 function isBoolColumn(schemaData: SchemaData | undefined, meta: ColumnMeta | undefined): boolean {
@@ -956,6 +978,11 @@ export function ResultsTable({ results, resultSets, activeResultIndex = 0, onSel
               {displayCols.map(col => {
                 const hMeta = results.columnMeta?.find(m => m.name === col);
                 const hComment = commentFor(schemaData, hMeta);
+                const hMark = indexMarkFor(schemaData, hMeta);
+                // Column comment first (it says what the column is), index
+                // detail after — both in the one tooltip the `th` can carry.
+                const hTitle = [hComment, hMark && describeIndexMark(hMark)]
+                  .filter(Boolean).join('\n\n') || undefined;
                 const w = colWidths[col];
                 const isDragSrc  = dragSrc  === col;
                 const isDragOver = dragOver === col && dragSrc !== col;
@@ -987,7 +1014,7 @@ export function ResultsTable({ results, resultSets, activeResultIndex = 0, onSel
                     }}
                     onDragEnd={() => { setDragSrc(null); setDragOver(null); }}
                     onClick={() => { if (!resizeRef.current) handleSort(col); }}
-                    title={hComment}
+                    title={hTitle}
                     style={{
                       ...s.th,
                       cursor: resizingCol ? 'col-resize' : 'grab',
@@ -999,7 +1026,12 @@ export function ResultsTable({ results, resultSets, activeResultIndex = 0, onSel
                     }}
                   >
                     <div style={{ display: 'flex', alignItems: 'center', gap: 5, overflow: 'hidden', paddingRight: 4 }}>
-                      {col}
+                      {/* Name truncates before the marks do — an index mark that
+                          only shows on short column names is no reminder at all. */}
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{col}</span>
+                      {hMark && (
+                        <IndexMarkIcon kind={hMark.kind} color={hMark.kind === 'leading' ? t.textAccent : t.textMuted} />
+                      )}
                       {sortCol === col && (
                         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={t.accent} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                           {sortDir === 'asc' ? <polyline points="18 15 12 9 6 15"/> : <polyline points="6 9 12 15 18 9"/>}

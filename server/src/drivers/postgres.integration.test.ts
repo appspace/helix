@@ -172,6 +172,36 @@ describe('PostgresDriver – getSchema', () => {
 });
 
 // ---------------------------------------------------------------------------
+// getSchema / getTable – indexes
+// ---------------------------------------------------------------------------
+
+describe('PostgresDriver – index metadata', () => {
+  it('reports the primary key index', async () => {
+    const info = await driver.getSchema('public');
+    const users = info.tables.find(t => t.name === 'users')!;
+    const pk = users.indexes.find(i => i.columns.includes('id'))!;
+    expect(pk.unique).toBe(true);
+    expect(pk.columns).toEqual(['id']);
+    expect(pk.type).toBe('btree');
+  });
+
+  it('reports composite index columns in index order', async () => {
+    const info = await driver.getSchema('public');
+    const orders = info.tables.find(t => t.name === 'orders')!;
+    const composite = orders.indexes.find(i => i.name === 'idx_orders_user_created')!;
+    expect(composite.columns).toEqual(['user_id', 'created_at']);
+    expect(composite.unique).toBe(false);
+  });
+
+  it('getTable returns the same indexes as getSchema for that table', async () => {
+    const info = await driver.getSchema('public');
+    const fromSchema = info.tables.find(t => t.name === 'orders')!.indexes;
+    const fromTable = (await driver.getTable('public', 'orders'))!.indexes;
+    expect(fromTable).toEqual(fromSchema);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // getTableDdl
 // ---------------------------------------------------------------------------
 

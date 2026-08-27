@@ -30,6 +30,8 @@ export async function setup() {
     await db.dropDatabase();
     await db.createCollection('users');
     await db.collection('users').createIndex({ name: 1 });
+    // Composite index: index-order coverage for the column index marks.
+    await db.collection('users').createIndex({ age: 1, name: -1 });
     // Insert and remove a sentinel so listDatabases shows helix_test immediately.
     await db.collection('users').insertOne({ _setup: true });
     await db.collection('users').deleteMany({ _setup: true });

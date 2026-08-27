@@ -219,3 +219,93 @@ describe('MysqlDriver.query – BIT column serialization', () => {
     expect(result.rows).toEqual([{ data: 'dead' }]);
   });
 });
+
+describe('MysqlDriver – index metadata', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockPool.getConnection.mockResolvedValue(mockConn);
+  });
+
+  // information_schema.STATISTICS rows, one per (index, column) pair, in the
+  // order the driver's ORDER BY produces them.
+  const STATISTICS_ROWS = [
+    { tbl: 'orders', idx: 'PRIMARY', col: 'id', non_unique: 0, idx_type: 'BTREE' },
+    { tbl: 'orders', idx: 'idx_user_created', col: 'user_id', non_unique: 1, idx_type: 'BTREE' },
+    { tbl: 'orders', idx: 'idx_user_created', col: 'created_at', non_unique: 1, idx_type: 'BTREE' },
+    { tbl: 'users', idx: 'uq_email', col: 'email', non_unique: 0, idx_type: 'BTREE' },
+  ];
+
+  // getSchema fires six queries: tables, columns, indexes, views, procedures, triggers.
+  function stubGetSchema(statisticsRows: Record<string, unknown>[]) {
+    mockConn.query
+      .mockResolvedValueOnce([[
+        { name: 'orders', row_count: 3, comment: '' },
+        { name: 'users', row_count: 1, comment: '' },
+      ]])
+      .mockResolvedValueOnce([[]])
+      .mockResolvedValueOnce([statisticsRows])
+      .mockResolvedValueOnce([[]])
+      .mockResolvedValueOnce([[]])
+      .mockResolvedValueOnce([[]]);
+  }
+
+  it('folds STATISTICS rows into one index per name, keyed by table', async () => {
+    stubGetSchema(STATISTICS_ROWS);
+    const info = await makeDriver().getSchema('shop');
+
+    expect(info.tables.find(t => t.name === 'orders')!.indexes).toEqual([
+      { name: 'PRIMARY', unique: true, columns: ['id'], type: 'BTREE' },
+      { name: 'idx_user_created', unique: false, columns: ['user_id', 'created_at'], type: 'BTREE' },
+    ]);
+    expect(info.tables.find(t => t.name === 'users')!.indexes).toEqual([
+      { name: 'uq_email', unique: true, columns: ['email'], type: 'BTREE' },
+    ]);
+  });
+
+  it('preserves SEQ_IN_INDEX order — it decides whether a query can use the index', async () => {
+    stubGetSchema(STATISTICS_ROWS);
+    const info = await makeDriver().getSchema('shop');
+    const composite = info.tables.find(t => t.name === 'orders')!.indexes
+      .find(i => i.name === 'idx_user_created')!;
+    expect(composite.columns).toEqual(['user_id', 'created_at']);
+  });
+
+  it('asks the server for STATISTICS rows in index-position order', async () => {
+    stubGetSchema([]);
+    await makeDriver().getSchema('shop');
+    const indexSql = mockConn.query.mock.calls[2][0] as string;
+    expect(indexSql).toMatch(/information_schema\.STATISTICS/);
+    expect(indexSql).toMatch(/ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX/);
+  });
+
+  it('leaves tables with no indexes as an empty list', async () => {
+    stubGetSchema([]);
+    const info = await makeDriver().getSchema('shop');
+    expect(info.tables.map(t => t.indexes)).toEqual([[], []]);
+  });
+
+  it('renders MySQL 8 functional index parts (NULL COLUMN_NAME) as (expression)', async () => {
+    stubGetSchema([
+      { tbl: 'orders', idx: 'idx_upper_ref', col: null, non_unique: 1, idx_type: 'BTREE' },
+    ]);
+    const info = await makeDriver().getSchema('shop');
+    expect(info.tables.find(t => t.name === 'orders')!.indexes[0].columns).toEqual(['(expression)']);
+  });
+
+  it('reports the access method for non-btree indexes', async () => {
+    stubGetSchema([
+      { tbl: 'orders', idx: 'ft_notes', col: 'notes', non_unique: 1, idx_type: 'FULLTEXT' },
+    ]);
+    const info = await makeDriver().getSchema('shop');
+    expect(info.tables.find(t => t.name === 'orders')!.indexes[0].type).toBe('FULLTEXT');
+  });
+
+  it('getTable returns the indexes of that table only', async () => {
+    mockConn.query
+      .mockResolvedValueOnce([[{ name: 'orders', row_count: 3, comment: '' }]])
+      .mockResolvedValueOnce([[]])
+      .mockResolvedValueOnce([STATISTICS_ROWS]);
+    const table = await makeDriver().getTable('shop', 'orders');
+    expect(table!.indexes.map(i => i.name)).toEqual(['PRIMARY', 'idx_user_created']);
+  });
+});

@@ -53,7 +53,9 @@ export async function setup() {
         user_id    INT,
         total      DECIMAL(10,2) NOT NULL,
         created_at DATETIME DEFAULT NOW(),
-        INDEX idx_orders_user_id (user_id)
+        INDEX idx_orders_user_id (user_id),
+        -- Composite index: index-order coverage for the column index marks.
+        INDEX idx_orders_user_created (user_id, created_at)
       );
     `);
   } finally {

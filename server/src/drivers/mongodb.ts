@@ -7,10 +7,30 @@ import type {
   QueryResult,
   ColumnMeta,
   ColumnInfo,
+  IndexInfo,
   SchemaInfo,
   TableInfo,
   CollectionInfo,
 } from './interface.js';
+
+/**
+ * Map a raw `collection.indexes()` entry onto `IndexInfo`. Key order in the
+ * `key` document is the index order, and JS preserves string-key insertion
+ * order, so `Object.keys` is faithful here. Direction values are 1 / -1 for
+ * b-tree keys; anything else is the access method for that key ('text',
+ * '2dsphere', 'hashed', …), which we surface as the index type.
+ */
+function toMongoIndexInfo(raw: Document): IndexInfo {
+  const key = (raw['key'] ?? {}) as Record<string, unknown>;
+  const columns = Object.keys(key);
+  const special = columns.map(c => key[c]).find(v => typeof v === 'string');
+  return {
+    name: (raw['name'] as string) ?? '',
+    unique: raw['unique'] === true,
+    columns,
+    type: typeof special === 'string' ? special : 'btree',
+  };
+}
 
 function classifyMongoError(err: unknown): DriverError {
   const message = err instanceof Error ? err.message : String(err);
@@ -384,15 +404,17 @@ export class MongoDBDriver implements DbDriver {
     const tables: TableInfo[] = await Promise.all(
       baseCollections.map(async (c) => {
         const coll = db.collection(c.name);
-        const [docs, count] = await Promise.all([
+        const [docs, count, indexes] = await Promise.all([
           this.sampleDocs(coll),
           coll.estimatedDocumentCount().catch(() => 0),
+          this.listIndexes(coll),
         ]);
         return {
           name: c.name,
           rows: count,
           comment: '',
           columns: this.inferColumnsFromSample(docs),
+          indexes,
         };
       }),
     );
@@ -411,16 +433,30 @@ export class MongoDBDriver implements DbDriver {
     const list = await db.listCollections({ name: table }, { nameOnly: false }).toArray();
     if (list.length === 0) return null;
     const coll = db.collection(table);
-    const [docs, count] = await Promise.all([
+    const [docs, count, indexes] = await Promise.all([
       this.sampleDocs(coll),
       coll.estimatedDocumentCount().catch(() => 0),
+      this.listIndexes(coll),
     ]);
     return {
       name: table,
       rows: count,
       comment: '',
       columns: this.inferColumnsFromSample(docs),
+      indexes,
     };
+  }
+
+  // Index listing is best-effort: a collection can vanish between listCollections
+  // and this call, and a restricted user may lack listIndexes. Neither should
+  // sink the whole schema fetch — the UI just shows no index marks.
+  private async listIndexes(coll: ReturnType<Db['collection']>): Promise<IndexInfo[]> {
+    try {
+      const raw = await coll.indexes();
+      return raw.map(toMongoIndexInfo);
+    } catch {
+      return [];
+    }
   }
 
   private async sampleDocs(coll: ReturnType<Db['collection']>): Promise<Document[]> {

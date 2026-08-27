@@ -566,9 +566,10 @@ describe('MongoDBDriver – getSchemas', () => {
 /**
  * Build a stub collection whose `find().sort().limit().toArray()` chain resolves
  * to the supplied docs. The returned object exposes spies on each link so tests
- * can assert deterministic-sort + sample-size wiring.
+ * can assert deterministic-sort + sample-size wiring. `indexes` stands in for
+ * the raw `collection.indexes()` payload.
  */
-function makeSampleColl(docs: Document[], count: number) {
+function makeSampleColl(docs: Document[], count: number, indexes: Document[] = []) {
   const toArray = vi.fn().mockResolvedValue(docs);
   const limit = vi.fn(() => ({ toArray }));
   const sort = vi.fn(() => ({ limit }));
@@ -579,6 +580,7 @@ function makeSampleColl(docs: Document[], count: number) {
     limit,
     toArray,
     estimatedDocumentCount: vi.fn().mockResolvedValue(count),
+    indexes: vi.fn().mockResolvedValue(indexes),
   };
 }
 
@@ -843,5 +845,56 @@ describe('MongoDBDriver – error classification', () => {
     const req = JSON.stringify({ collection: 'users', operation: 'find' });
     const thrown = await makeDriver().query(req).catch(e => e);
     expect(thrown).toBe(original);
+  });
+});
+
+describe('MongoDBDriver – index metadata', () => {
+  function stubCollection(coll: ReturnType<typeof makeSampleColl>) {
+    mockListCursor.toArray.mockResolvedValueOnce([{ name: 'users', type: 'collection' }]);
+    mockDb.collection.mockReturnValueOnce(coll as unknown as typeof mockCollection);
+  }
+
+  it('maps index key order onto columns and flags uniqueness', async () => {
+    stubCollection(makeSampleColl([{ _id: 1 }], 1, [
+      { v: 2, key: { _id: 1 }, name: '_id_' },
+      { v: 2, key: { email: 1 }, name: 'email_1', unique: true },
+      { v: 2, key: { tenant: 1, created: -1 }, name: 'tenant_1_created_-1' },
+    ]));
+
+    const schema = await makeDriver().getSchema('shop');
+    expect(schema.tables[0].indexes).toEqual([
+      { name: '_id_', unique: false, columns: ['_id'], type: 'btree' },
+      { name: 'email_1', unique: true, columns: ['email'], type: 'btree' },
+      { name: 'tenant_1_created_-1', unique: false, columns: ['tenant', 'created'], type: 'btree' },
+    ]);
+  });
+
+  it('surfaces a non-btree access method as the index type', async () => {
+    stubCollection(makeSampleColl([{ _id: 1 }], 1, [
+      { v: 2, key: { body: 'text' }, name: 'body_text' },
+      { v: 2, key: { loc: '2dsphere' }, name: 'loc_2dsphere' },
+    ]));
+
+    const schema = await makeDriver().getSchema('shop');
+    expect(schema.tables[0].indexes.map((i) => i.type)).toEqual(['text', '2dsphere']);
+  });
+
+  it('reports no indexes when listIndexes is unavailable rather than failing the schema fetch', async () => {
+    const coll = makeSampleColl([{ _id: 1 }], 1);
+    coll.indexes.mockRejectedValueOnce(new Error('not authorized'));
+    stubCollection(coll);
+
+    const schema = await makeDriver().getSchema('shop');
+    expect(schema.tables[0].indexes).toEqual([]);
+    expect(schema.tables[0].name).toBe('users');
+  });
+
+  it('getTable returns the collection indexes', async () => {
+    mockListCursor.toArray.mockResolvedValueOnce([{ name: 'users', type: 'collection' }]);
+    const coll = makeSampleColl([{ _id: 1 }], 1, [{ v: 2, key: { _id: 1 }, name: '_id_' }]);
+    mockDb.collection.mockReturnValueOnce(coll as unknown as typeof mockCollection);
+
+    const table = await makeDriver().getTable('shop', 'users');
+    expect(table!.indexes).toEqual([{ name: '_id_', unique: false, columns: ['_id'], type: 'btree' }]);
   });
 });
