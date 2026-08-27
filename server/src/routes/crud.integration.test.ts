@@ -10,7 +10,9 @@ import { postDeleteRow } from './deleteRow.js';
 
 const DB_CONFIG = {
   host: process.env['MYSQL_HOST'] ?? 'localhost',
-  port: Number(process.env['MYSQL_PORT'] ?? 3307),
+  // Must match the default in test-setup/global-setup.ts — 13306 is the
+  // throwaway mysql-test container, not a port a real database may sit on.
+  port: Number(process.env['MYSQL_PORT'] ?? 13306),
   user: process.env['MYSQL_USER'] ?? 'root',
   password: process.env['MYSQL_PASSWORD'] ?? 'root',
   type: 'mysql' as const,

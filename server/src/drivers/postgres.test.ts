@@ -16,7 +16,9 @@ const { setTypeParser } = vi.hoisted(() => ({ setTypeParser: vi.fn() }));
 
 vi.mock('pg', () => ({
   default: {
-    Pool: vi.fn(() => mockPoolInstance),
+    // vitest 4 constructs through the mock implementation, so `new pg.Pool()`
+    // needs a real `function` here — an arrow is not a constructor.
+    Pool: vi.fn(function () { return mockPoolInstance; }),
     types: { setTypeParser },
   },
 }));
@@ -169,7 +171,8 @@ describe('PostgresDriver.recyclePool', () => {
     const Pool = await getPoolCtor();
     const oldPool = { connect: vi.fn(), query: vi.fn(), end: vi.fn().mockResolvedValue(undefined) };
     const newPool = { connect: vi.fn().mockResolvedValue(mockClient), query: vi.fn(), end: vi.fn() };
-    Pool.mockImplementationOnce(() => oldPool).mockImplementationOnce(() => newPool);
+    Pool.mockImplementationOnce(function () { return oldPool; })
+        .mockImplementationOnce(function () { return newPool; });
 
     const driver = makeDriver();
     await driver.recyclePool();
@@ -185,7 +188,8 @@ describe('PostgresDriver.recyclePool', () => {
   it('pre-warms the new pool so the next user query skips the connect cost', async () => {
     const Pool = await getPoolCtor();
     const newPool = { connect: vi.fn().mockResolvedValue(mockClient), query: vi.fn(), end: vi.fn() };
-    Pool.mockImplementationOnce(() => mockPoolInstance).mockImplementationOnce(() => newPool);
+    Pool.mockImplementationOnce(function () { return mockPoolInstance; })
+        .mockImplementationOnce(function () { return newPool; });
 
     const driver = makeDriver();
     await driver.recyclePool();
@@ -196,7 +200,7 @@ describe('PostgresDriver.recyclePool', () => {
 
   it('coalesces concurrent recycle calls so a duplicate event does not orphan a pool', async () => {
     const Pool = await getPoolCtor();
-    Pool.mockImplementation(() => mockPoolInstance);
+    Pool.mockImplementation(function () { return mockPoolInstance; });
     mockPoolInstance.end.mockResolvedValue(undefined);
     const driver = makeDriver();
     Pool.mockClear();

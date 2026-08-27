@@ -60,7 +60,9 @@ const { ObjectIdCtor } = vi.hoisted(() => {
 });
 
 vi.mock('mongodb', () => ({
-  MongoClient: vi.fn(() => mockClient),
+  // vitest 4 constructs through the mock implementation, so `new MongoClient()`
+  // needs a real `function` here — an arrow is not a constructor.
+  MongoClient: vi.fn(function () { return mockClient; }),
   ObjectId: ObjectIdCtor,
   MongoNetworkError: class MongoNetworkError extends Error { constructor(msg: string) { super(msg); this.name = 'MongoNetworkError'; } },
   MongoServerSelectionError: class MongoServerSelectionError extends Error { constructor(msg: string) { super(msg); this.name = 'MongoServerSelectionError'; } },
