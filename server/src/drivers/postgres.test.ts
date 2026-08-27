@@ -251,12 +251,14 @@ describe('PostgresDriver – index metadata', () => {
     { tbl: 'users', idx: 'users_email_key', is_unique: true, idx_type: 'btree', col: 'email' },
   ];
 
-  // getSchema queries sequentially: tables, columns, indexes, views, routines, triggers.
+  // getSchema queries sequentially: tables, columns, indexes, foreign keys,
+  // views, routines, triggers.
   function stubGetSchema(indexRows: Record<string, unknown>[]) {
     mockClient.query
       .mockResolvedValueOnce({ rows: [{ name: 'orders', row_count: '3' }, { name: 'users', row_count: '1' }] })
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: indexRows })
+      .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] });
@@ -309,8 +311,85 @@ describe('PostgresDriver – index metadata', () => {
     mockClient.query
       .mockResolvedValueOnce({ rows: [{ name: 'orders', row_count: '3' }] })
       .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: INDEX_ROWS.filter(r => r.tbl === 'orders') });
+      .mockResolvedValueOnce({ rows: INDEX_ROWS.filter(r => r.tbl === 'orders') })
+      .mockResolvedValueOnce({ rows: [] });
     const table = await makeDriver().getTable('public', 'orders');
     expect(table!.indexes.map(i => i.name)).toEqual(['orders_pkey', 'orders_tenant_created_idx']);
+  });
+});
+
+describe('PostgresDriver – foreign key metadata', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockPoolInstance.connect.mockResolvedValue(mockClient);
+  });
+
+  // One row per (constraint, column) pair, ordered by position within the key.
+  const FK_ROWS = [
+    { tbl: 'orders', name: 'orders_user_id_fkey', col: 'user_id',
+      ref_schema: 'public', ref_tbl: 'users', ref_col: 'id' },
+    { tbl: 'order_items', name: 'order_items_order_fkey', col: 'order_tenant',
+      ref_schema: 'public', ref_tbl: 'orders', ref_col: 'tenant' },
+    { tbl: 'order_items', name: 'order_items_order_fkey', col: 'order_id',
+      ref_schema: 'public', ref_tbl: 'orders', ref_col: 'id' },
+  ];
+
+  function stubGetSchema(fkRows: Record<string, unknown>[]) {
+    mockClient.query
+      .mockResolvedValueOnce({ rows: [{ name: 'orders', row_count: '3' }, { name: 'order_items', row_count: '9' }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: fkRows })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+  }
+
+  it('folds pg_constraint rows into one entry per constraint, keyed by table', async () => {
+    stubGetSchema(FK_ROWS);
+    const info = await makeDriver().getSchema('public');
+
+    expect(info.tables.find(t => t.name === 'orders')!.foreignKeys).toEqual([
+      {
+        name: 'orders_user_id_fkey',
+        columns: ['user_id'],
+        referencedSchema: 'public',
+        referencedTable: 'users',
+        referencedColumns: ['id'],
+      },
+    ]);
+  });
+
+  it('keeps composite key columns aligned with the columns they reference', async () => {
+    stubGetSchema(FK_ROWS);
+    const info = await makeDriver().getSchema('public');
+    const fk = info.tables.find(t => t.name === 'order_items')!.foreignKeys[0];
+    expect(fk.columns).toEqual(['order_tenant', 'order_id']);
+    expect(fk.referencedColumns).toEqual(['tenant', 'id']);
+  });
+
+  it('unnests conkey and confkey together so composite keys stay paired', async () => {
+    stubGetSchema([]);
+    await makeDriver().getSchema('public');
+    const fkSql = mockClient.query.mock.calls[3][0] as string;
+    expect(fkSql).toContain('unnest(con.conkey, con.confkey) WITH ORDINALITY');
+    expect(fkSql).toContain("con.contype = 'f'");
+    expect(fkSql).toContain('ORDER BY c.relname, con.conname, k.ord');
+  });
+
+  it('leaves tables with no foreign keys as an empty list', async () => {
+    stubGetSchema([]);
+    const info = await makeDriver().getSchema('public');
+    expect(info.tables.map(t => t.foreignKeys)).toEqual([[], []]);
+  });
+
+  it('getTable returns the foreign keys of that table only', async () => {
+    mockClient.query
+      .mockResolvedValueOnce({ rows: [{ name: 'orders', row_count: '3' }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: FK_ROWS.filter(r => r.tbl === 'orders') });
+    const table = await makeDriver().getTable('public', 'orders');
+    expect(table!.foreignKeys.map(f => f.name)).toEqual(['orders_user_id_fkey']);
   });
 });

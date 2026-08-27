@@ -67,12 +67,26 @@ export interface IndexInfo {
   type: string;
 }
 
+/**
+ * One foreign key, described from the referencing table's side. `columns` and
+ * `referencedColumns` are parallel and in constraint order.
+ */
+export interface ForeignKeyInfo {
+  name: string;
+  columns: string[];
+  /** Schema of the referenced table — may differ from the table's own schema. */
+  referencedSchema: string;
+  referencedTable: string;
+  referencedColumns: string[];
+}
+
 export interface TableInfo {
   name: string;
   rows: number;
   comment: string;
   columns: ColumnInfo[];
   indexes: IndexInfo[];
+  foreignKeys: ForeignKeyInfo[];
 }
 
 export interface SchemaInfo {

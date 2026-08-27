@@ -105,6 +105,11 @@ describe('MongoDBDriver – index metadata', () => {
     expect(compound.columns).toEqual(['age', 'name']);
   });
 
+  it('reports no foreign keys — MongoDB has no referential constraints', async () => {
+    const info = await driver.getSchema('helix_test');
+    expect(info.tables.every(t => t.foreignKeys.length === 0)).toBe(true);
+  });
+
   it('getTable returns the same indexes as getSchema for that collection', async () => {
     const info = await driver.getSchema('helix_test');
     const fromSchema = info.tables.find(t => t.name === 'users')!.indexes;

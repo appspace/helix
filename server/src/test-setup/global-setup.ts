@@ -55,7 +55,9 @@ export async function setup() {
         created_at DATETIME DEFAULT NOW(),
         INDEX idx_orders_user_id (user_id),
         -- Composite index: index-order coverage for the column index marks.
-        INDEX idx_orders_user_created (user_id, created_at)
+        INDEX idx_orders_user_created (user_id, created_at),
+        -- Foreign key: an edge for the ERD view to draw.
+        CONSTRAINT fk_orders_user FOREIGN KEY (user_id) REFERENCES users(id)
       );
     `);
   } finally {

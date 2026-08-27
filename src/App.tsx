@@ -16,6 +16,7 @@ import { listSavedQueries, saveQuery, deleteSavedQuery, renameSavedQuery, type S
 import { buildDefaultTableQuery } from './lib/sql';
 import { loadTabs, saveTabs } from './tabPersistence';
 import { CreateTableDialog } from './components/CreateTableDialog';
+import { ErdView } from './components/ErdView';
 import { AlterTableDialog } from './components/AlterTableDialog';
 import type { DbType, SchemaColumn } from './api';
 
@@ -78,6 +79,8 @@ export default function App() {
   const [queryMode, setQueryMode] = useState<QueryMode>('sql');
   const [dbType, setDbType] = useState<DbType | null>(null);
   const [showCreateTable, setShowCreateTable] = useState(false);
+  // null = closed; { table: null } = whole schema; { table: name } = that table's neighbourhood.
+  const [erd, setErd] = useState<{ table: string | null } | null>(null);
   const [alteringTable, setAlteringTable] = useState<{ schema: string; table: string; columns: SchemaColumn[] } | null>(null);
   const [showConnectionModal, setShowConnectionModal] = useState(true);
   const [isConnecting, setIsConnecting] = useState(false);
@@ -568,6 +571,7 @@ export default function App() {
           onDropTable={handleDropTable}
           onCreateTable={queryMode === 'sql' ? () => setShowCreateTable(true) : undefined}
           onAlterTable={queryMode === 'sql' ? handleOpenAlterTable : undefined}
+          onShowErd={queryMode === 'sql' ? (table: string | null) => setErd({ table }) : undefined}
           t={t}
         />
 
@@ -628,6 +632,17 @@ export default function App() {
           onConnect={handleConnect}
           isConnecting={isConnecting}
           error={connectionError}
+          t={t}
+        />
+      )}
+
+      {erd && (
+        <ErdView
+          schema={schemaData}
+          activeSchema={activeSchema}
+          table={erd.table}
+          onOpenTable={(name) => { setErd(null); handleTableSelect(name); }}
+          onClose={() => setErd(null)}
           t={t}
         />
       )}

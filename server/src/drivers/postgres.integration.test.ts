@@ -202,6 +202,38 @@ describe('PostgresDriver – index metadata', () => {
 });
 
 // ---------------------------------------------------------------------------
+// getSchema / getTable – foreign keys
+// ---------------------------------------------------------------------------
+
+describe('PostgresDriver – foreign key metadata', () => {
+  it('reports the referencing and referenced sides of a foreign key', async () => {
+    const info = await driver.getSchema('public');
+    const orders = info.tables.find(t => t.name === 'orders')!;
+    expect(orders.foreignKeys).toEqual([
+      {
+        name: 'orders_user_id_fkey',
+        columns: ['user_id'],
+        referencedSchema: 'public',
+        referencedTable: 'users',
+        referencedColumns: ['id'],
+      },
+    ]);
+  });
+
+  it('reports no foreign keys on the referenced table itself', async () => {
+    const info = await driver.getSchema('public');
+    expect(info.tables.find(t => t.name === 'users')!.foreignKeys).toEqual([]);
+  });
+
+  it('getTable returns the same foreign keys as getSchema for that table', async () => {
+    const info = await driver.getSchema('public');
+    const fromSchema = info.tables.find(t => t.name === 'orders')!.foreignKeys;
+    const fromTable = (await driver.getTable('public', 'orders'))!.foreignKeys;
+    expect(fromTable).toEqual(fromSchema);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // getTableDdl
 // ---------------------------------------------------------------------------
 

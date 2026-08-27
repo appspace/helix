@@ -59,3 +59,35 @@ describe('MysqlDriver – index metadata', () => {
     expect(fromTable).toEqual(fromSchema);
   });
 });
+
+// ---------------------------------------------------------------------------
+// getSchema / getTable – foreign keys
+// ---------------------------------------------------------------------------
+
+describe('MysqlDriver – foreign key metadata', () => {
+  it('reports the referencing and referenced sides of a foreign key', async () => {
+    const info = await driver.getSchema('helix_test');
+    const orders = info.tables.find(t => t.name === 'orders')!;
+    expect(orders.foreignKeys).toEqual([
+      {
+        name: 'fk_orders_user',
+        columns: ['user_id'],
+        referencedSchema: 'helix_test',
+        referencedTable: 'users',
+        referencedColumns: ['id'],
+      },
+    ]);
+  });
+
+  it('reports no foreign keys on the referenced table itself', async () => {
+    const info = await driver.getSchema('helix_test');
+    expect(info.tables.find(t => t.name === 'users')!.foreignKeys).toEqual([]);
+  });
+
+  it('getTable returns the same foreign keys as getSchema for that table', async () => {
+    const info = await driver.getSchema('helix_test');
+    const fromSchema = info.tables.find(t => t.name === 'orders')!.foreignKeys;
+    const fromTable = (await driver.getTable('helix_test', 'orders'))!.foreignKeys;
+    expect(fromTable).toEqual(fromSchema);
+  });
+});

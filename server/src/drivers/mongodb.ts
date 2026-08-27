@@ -415,6 +415,8 @@ export class MongoDBDriver implements DbDriver {
           comment: '',
           columns: this.inferColumnsFromSample(docs),
           indexes,
+          // MongoDB has no referential constraints to report.
+          foreignKeys: [],
         };
       }),
     );
@@ -444,6 +446,7 @@ export class MongoDBDriver implements DbDriver {
       comment: '',
       columns: this.inferColumnsFromSample(docs),
       indexes,
+      foreignKeys: [],
     };
   }
 
