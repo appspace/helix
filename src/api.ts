@@ -11,11 +11,21 @@ export interface SchemaColumn {
   comment: string;
 }
 
+/** One index on a table. `columns` is in index order — leftmost column first. */
+export interface SchemaIndex {
+  name: string;
+  unique: boolean;
+  columns: string[];
+  /** Access method as the engine reports it: 'BTREE', 'FULLTEXT', 'gin', 'text', … */
+  type: string;
+}
+
 export interface SchemaTable {
   name: string;
   rows: number;
   comment: string;
   columns: SchemaColumn[];
+  indexes: SchemaIndex[];
 }
 
 export interface SchemaData {

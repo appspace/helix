@@ -1,6 +1,6 @@
 import mysql from 'mysql2/promise';
 import type { RowDataPacket, FieldPacket, ResultSetHeader } from 'mysql2/promise';
-import type { DbDriver, ConnectionConfig, QueryResult, ColumnMeta, ColumnInfo, SchemaInfo, TableInfo } from './interface.js';
+import type { DbDriver, ConnectionConfig, QueryResult, ColumnMeta, ColumnInfo, IndexInfo, SchemaInfo, TableInfo } from './interface.js';
 
 function buildMysqlPoolOptions(config: ConnectionConfig): mysql.PoolOptions {
   return {
@@ -100,6 +100,35 @@ function buildMysqlResult(rows: RowDataPacket[] | ResultSetHeader, fields: Field
   });
 
   return { rows: serializedRows, columnMeta };
+}
+
+/**
+ * Fold information_schema.STATISTICS rows — one per (index, column) pair — into
+ * one `IndexInfo` per index, keyed by table. Callers must order the rows by
+ * SEQ_IN_INDEX so `columns` comes out in index order; that order is what
+ * decides whether a query can use the index. NON_UNIQUE is inverted (0 =
+ * unique), and MySQL 8 functional index parts carry a NULL COLUMN_NAME.
+ */
+function groupMysqlIndexes(rows: RowDataPacket[]): Map<string, IndexInfo[]> {
+  const byTable = new Map<string, IndexInfo[]>();
+  for (const row of rows) {
+    const tname = row['tbl'] as string;
+    const iname = row['idx'] as string;
+    if (!byTable.has(tname)) byTable.set(tname, []);
+    const list = byTable.get(tname)!;
+    let idx = list.find(i => i.name === iname);
+    if (!idx) {
+      idx = {
+        name: iname,
+        unique: Number(row['non_unique']) === 0,
+        columns: [],
+        type: (row['idx_type'] as string) ?? '',
+      };
+      list.push(idx);
+    }
+    idx.columns.push((row['col'] as string | null) ?? '(expression)');
+  }
+  return byTable;
 }
 
 export class MysqlDriver implements DbDriver {
@@ -222,7 +251,7 @@ export class MysqlDriver implements DbDriver {
   async getSchema(schema: string): Promise<SchemaInfo> {
     const conn = await this.pool.getConnection();
     try {
-      const [[tables], [columns], [views], [procedures], [triggers]] = await Promise.all([
+      const [[tables], [columns], [indexes], [views], [procedures], [triggers]] = await Promise.all([
         conn.query<RowDataPacket[]>(
           `SELECT TABLE_NAME AS name, TABLE_ROWS AS row_count, TABLE_COMMENT AS comment
            FROM information_schema.TABLES
@@ -241,6 +270,14 @@ export class MysqlDriver implements DbDriver {
            FROM information_schema.COLUMNS
            WHERE TABLE_SCHEMA = ?
            ORDER BY TABLE_NAME, ORDINAL_POSITION`,
+          [schema],
+        ),
+        conn.query<RowDataPacket[]>(
+          `SELECT TABLE_NAME AS tbl, INDEX_NAME AS idx, COLUMN_NAME AS col,
+                  NON_UNIQUE AS non_unique, INDEX_TYPE AS idx_type
+           FROM information_schema.STATISTICS
+           WHERE TABLE_SCHEMA = ?
+           ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX`,
           [schema],
         ),
         conn.query<RowDataPacket[]>(
@@ -278,12 +315,15 @@ export class MysqlDriver implements DbDriver {
         });
       }
 
+      const indexesByTable = groupMysqlIndexes(indexes);
+
       return {
         tables: tables.map(t => ({
           name: t['name'] as string,
           rows: t['row_count'] as number,
           comment: (t['comment'] as string) ?? '',
           columns: colsByTable.get(t['name'] as string) ?? [],
+          indexes: indexesByTable.get(t['name'] as string) ?? [],
         })),
         views: views.map(v => v['name'] as string),
         procedures: procedures.map(p => p['name'] as string),
@@ -297,7 +337,7 @@ export class MysqlDriver implements DbDriver {
   async getTable(schema: string, table: string): Promise<TableInfo | null> {
     const conn = await this.pool.getConnection();
     try {
-      const [[tables], [columns]] = await Promise.all([
+      const [[tables], [columns], [indexes]] = await Promise.all([
         conn.query<RowDataPacket[]>(
           `SELECT TABLE_NAME AS name, TABLE_ROWS AS row_count, TABLE_COMMENT AS comment
            FROM information_schema.TABLES
@@ -315,6 +355,14 @@ export class MysqlDriver implements DbDriver {
            FROM information_schema.COLUMNS
            WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
            ORDER BY ORDINAL_POSITION`,
+          [schema, table],
+        ),
+        conn.query<RowDataPacket[]>(
+          `SELECT TABLE_NAME AS tbl, INDEX_NAME AS idx, COLUMN_NAME AS col,
+                  NON_UNIQUE AS non_unique, INDEX_TYPE AS idx_type
+           FROM information_schema.STATISTICS
+           WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+           ORDER BY INDEX_NAME, SEQ_IN_INDEX`,
           [schema, table],
         ),
       ]);
@@ -339,6 +387,7 @@ export class MysqlDriver implements DbDriver {
         rows: t['row_count'] as number,
         comment: (t['comment'] as string) ?? '',
         columns: cols,
+        indexes: groupMysqlIndexes(indexes).get(table) ?? [],
       };
     } finally {
       conn.release();

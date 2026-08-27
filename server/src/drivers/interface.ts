@@ -53,11 +53,26 @@ export interface ColumnInfo {
   inferred?: boolean;
 }
 
+/**
+ * One index on a table. `columns` is in index order (leftmost first) — the
+ * order is what decides whether a query can use the index, so it must be
+ * preserved end to end.
+ */
+export interface IndexInfo {
+  name: string;
+  unique: boolean;
+  /** Column names in index order. Functional/expression parts appear as `(expression)`. */
+  columns: string[];
+  /** Access method: 'BTREE', 'FULLTEXT', 'btree', 'gin', 'text', … as the engine reports it. */
+  type: string;
+}
+
 export interface TableInfo {
   name: string;
   rows: number;
   comment: string;
   columns: ColumnInfo[];
+  indexes: IndexInfo[];
 }
 
 export interface SchemaInfo {

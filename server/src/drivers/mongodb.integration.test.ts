@@ -86,6 +86,34 @@ describe('MongoDBDriver – getSchema', () => {
 });
 
 // ---------------------------------------------------------------------------
+// getSchema / getTable – indexes
+// ---------------------------------------------------------------------------
+
+describe('MongoDBDriver – index metadata', () => {
+  it('reports the implicit unique _id index', async () => {
+    const info = await driver.getSchema('helix_test');
+    const users = info.tables.find(t => t.name === 'users')!;
+    const idIndex = users.indexes.find(i => i.columns[0] === '_id')!;
+    expect(idIndex.columns).toEqual(['_id']);
+    expect(idIndex.type).toBe('btree');
+  });
+
+  it('reports compound index keys in index order', async () => {
+    const info = await driver.getSchema('helix_test');
+    const users = info.tables.find(t => t.name === 'users')!;
+    const compound = users.indexes.find(i => i.columns.length === 2)!;
+    expect(compound.columns).toEqual(['age', 'name']);
+  });
+
+  it('getTable returns the same indexes as getSchema for that collection', async () => {
+    const info = await driver.getSchema('helix_test');
+    const fromSchema = info.tables.find(t => t.name === 'users')!.indexes;
+    const fromTable = (await driver.getTable('helix_test', 'users'))!.indexes;
+    expect(fromTable).toEqual(fromSchema);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // query – find
 // ---------------------------------------------------------------------------
 
