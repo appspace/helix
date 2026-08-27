@@ -15,6 +15,8 @@ interface SchemaBrowserProps {
   onDropTable?: (schema: string, table: string) => Promise<void>;
   onCreateTable?: () => void;
   onAlterTable?: (schema: string, table: string) => void;
+  /** Opens the foreign-key diagram — for one table, or for the whole schema when called with null. Omitted where the driver has no foreign keys. */
+  onShowErd?: (table: string | null) => void;
   loading?: boolean;
   t: Theme;
 }
@@ -85,7 +87,7 @@ function readStoredWidth(): number {
   }
 }
 
-export function SchemaBrowser({ schema, activeTable, onTableSelect, onSchemaChange, schemas, activeSchema, loading, onDropTable, onCreateTable, onAlterTable, t }: SchemaBrowserProps) {
+export function SchemaBrowser({ schema, activeTable, onTableSelect, onSchemaChange, schemas, activeSchema, loading, onDropTable, onCreateTable, onAlterTable, onShowErd, t }: SchemaBrowserProps) {
   const [expanded, setExpanded] = useState({ tables: true, views: false, procedures: false, triggers: false });
   const [expandedTables, setExpandedTables] = useState<Record<string, boolean>>({});
   const [filter, setFilter] = useState('');
@@ -209,6 +211,22 @@ export function SchemaBrowser({ schema, activeTable, onTableSelect, onSchemaChan
         <select value={activeSchema} onChange={e => onSchemaChange(e.target.value)} style={s.schemaSelect}>
           {schemas.map(sc => <option key={sc} value={sc}>{sc}</option>)}
         </select>
+        {onShowErd && (
+          <button
+            onClick={() => onShowErd(null)}
+            title="Foreign-key diagram for this schema"
+            aria-label="Foreign-key diagram for this schema"
+            style={{ display: 'flex', alignItems: 'center', background: 'transparent', border: 'none', color: t.textMuted, cursor: 'pointer', padding: 0, flexShrink: 0 }}
+            onMouseEnter={(e) => { e.currentTarget.style.color = t.textPrimary; }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = t.textMuted; }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="2" y="3" width="8" height="6" rx="1"/>
+              <rect x="14" y="15" width="8" height="6" rx="1"/>
+              <path d="M6 9v5a2 2 0 0 0 2 2h6"/>
+            </svg>
+          </button>
+        )}
       </div>
 
       <div style={s.searchWrap}>
@@ -329,6 +347,14 @@ export function SchemaBrowser({ schema, activeTable, onTableSelect, onSchemaChan
               icon={<><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></>}
               label="Query table"
             />
+            {onShowErd && (
+              <CtxItem
+                t={t}
+                onClick={() => { onShowErd(contextMenu.name); setContextMenu(null); }}
+                icon={<><rect x="2" y="3" width="8" height="6" rx="1"/><rect x="14" y="15" width="8" height="6" rx="1"/><path d="M6 9v5a2 2 0 0 0 2 2h6"/></>}
+                label="Dependencies"
+              />
+            )}
             {onAlterTable && (
               <CtxItem
                 t={t}

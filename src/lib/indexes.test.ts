@@ -4,7 +4,7 @@ import type { ColumnMeta, SchemaData, SchemaIndex } from '../api';
 
 function schema(indexes: SchemaIndex[]): SchemaData {
   return {
-    tables: [{ name: 'orders', rows: 0, comment: '', columns: [], indexes }],
+    tables: [{ name: 'orders', rows: 0, comment: '', columns: [], indexes, foreignKeys: [] }],
     views: [],
     procedures: [],
     triggers: [],

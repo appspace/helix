@@ -1,6 +1,6 @@
 import pg from 'pg';
 import { DriverError } from './interface.js';
-import type { DbDriver, ConnectionConfig, QueryResult, ColumnMeta, ColumnInfo, IndexInfo, SchemaInfo, TableInfo } from './interface.js';
+import type { DbDriver, ConnectionConfig, QueryResult, ColumnMeta, ColumnInfo, ForeignKeyInfo, IndexInfo, SchemaInfo, TableInfo } from './interface.js';
 
 // Return DATE / TIME / TIMESTAMP / TIMESTAMPTZ / TIMETZ as raw strings rather
 // than JS Dates. pg's default parsers route through `new Date(...)`, which
@@ -137,6 +137,59 @@ function groupPgIndexes(rows: PgIndexRow[]): Map<string, IndexInfo[]> {
       list.push(idx);
     }
     idx.columns.push(row.col ?? '(expression)');
+  }
+  return byTable;
+}
+
+// conkey and confkey are parallel attnum vectors — the nth referencing column
+// maps to the nth referenced one — so they must be unnested together to keep
+// composite keys aligned. information_schema.key_column_usage can express the
+// same thing but needs three joins to recover the referenced side.
+const PG_FK_SQL = `
+  SELECT c.relname AS tbl,
+         con.conname AS name,
+         a.attname AS col,
+         rn.nspname AS ref_schema,
+         rc.relname AS ref_tbl,
+         ra.attname AS ref_col
+  FROM pg_constraint con
+  JOIN pg_class c ON c.oid = con.conrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  JOIN pg_class rc ON rc.oid = con.confrelid
+  JOIN pg_namespace rn ON rn.oid = rc.relnamespace
+  CROSS JOIN LATERAL unnest(con.conkey, con.confkey) WITH ORDINALITY AS k(att, ref_att, ord)
+  JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.att
+  JOIN pg_attribute ra ON ra.attrelid = con.confrelid AND ra.attnum = k.ref_att
+  WHERE con.contype = 'f' AND n.nspname = $1`;
+
+interface PgForeignKeyRow {
+  tbl: string;
+  name: string;
+  col: string;
+  ref_schema: string;
+  ref_tbl: string;
+  ref_col: string;
+}
+
+/** Fold the one-row-per-(constraint, column) result of `PG_FK_SQL` into one `ForeignKeyInfo` per constraint, keyed by table. */
+function groupPgForeignKeys(rows: PgForeignKeyRow[]): Map<string, ForeignKeyInfo[]> {
+  const byTable = new Map<string, ForeignKeyInfo[]>();
+  for (const row of rows) {
+    if (!byTable.has(row.tbl)) byTable.set(row.tbl, []);
+    const list = byTable.get(row.tbl)!;
+    let fk = list.find(f => f.name === row.name);
+    if (!fk) {
+      fk = {
+        name: row.name,
+        columns: [],
+        referencedSchema: row.ref_schema,
+        referencedTable: row.ref_tbl,
+        referencedColumns: [],
+      };
+      list.push(fk);
+    }
+    fk.columns.push(row.col);
+    fk.referencedColumns.push(row.ref_col);
   }
   return byTable;
 }
@@ -311,6 +364,11 @@ export class PostgresDriver implements DbDriver {
          ORDER BY c.relname, i.relname, k.ord`,
         [schema],
       );
+      const fksRes = await client.query<PgForeignKeyRow>(
+        `${PG_FK_SQL}
+         ORDER BY c.relname, con.conname, k.ord`,
+        [schema],
+      );
       const viewsRes = await client.query<{ name: string }>(
         `SELECT table_name AS name FROM information_schema.views
          WHERE table_schema = $1 ORDER BY table_name`,
@@ -345,6 +403,7 @@ export class PostgresDriver implements DbDriver {
       }
 
       const indexesByTable = groupPgIndexes(indexesRes.rows);
+      const fksByTable = groupPgForeignKeys(fksRes.rows);
 
       return {
         tables: tablesRes.rows.map(t => ({
@@ -353,6 +412,7 @@ export class PostgresDriver implements DbDriver {
           comment: '',
           columns: colsByTable.get(t.name) ?? [],
           indexes: indexesByTable.get(t.name) ?? [],
+          foreignKeys: fksByTable.get(t.name) ?? [],
         })),
         views: viewsRes.rows.map(v => v.name),
         procedures: procsRes.rows.map(p => p.name),
@@ -411,6 +471,12 @@ export class PostgresDriver implements DbDriver {
         [schema, table],
       );
 
+      const fksRes = await client.query<PgForeignKeyRow>(
+        `${PG_FK_SQL} AND c.relname = $2
+         ORDER BY con.conname, k.ord`,
+        [schema, table],
+      );
+
       const cols: ColumnInfo[] = colsRes.rows.map(r => ({
         name: r.col,
         type: r.col_type,
@@ -428,6 +494,7 @@ export class PostgresDriver implements DbDriver {
         comment: '',
         columns: cols,
         indexes: groupPgIndexes(indexesRes.rows).get(table) ?? [],
+        foreignKeys: groupPgForeignKeys(fksRes.rows).get(table) ?? [],
       };
     } finally {
       client.release();

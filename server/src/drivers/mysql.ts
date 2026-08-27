@@ -1,6 +1,6 @@
 import mysql from 'mysql2/promise';
 import type { RowDataPacket, FieldPacket, ResultSetHeader } from 'mysql2/promise';
-import type { DbDriver, ConnectionConfig, QueryResult, ColumnMeta, ColumnInfo, IndexInfo, SchemaInfo, TableInfo } from './interface.js';
+import type { DbDriver, ConnectionConfig, QueryResult, ColumnMeta, ColumnInfo, ForeignKeyInfo, IndexInfo, SchemaInfo, TableInfo } from './interface.js';
 
 function buildMysqlPoolOptions(config: ConnectionConfig): mysql.PoolOptions {
   return {
@@ -131,6 +131,42 @@ function groupMysqlIndexes(rows: RowDataPacket[]): Map<string, IndexInfo[]> {
   return byTable;
 }
 
+/**
+ * Fold information_schema.KEY_COLUMN_USAGE rows — one per (constraint, column)
+ * pair — into one `ForeignKeyInfo` per constraint, keyed by table. Callers must
+ * filter to `REFERENCED_TABLE_NAME IS NOT NULL` (the same view also holds PK and
+ * unique constraints) and order by ORDINAL_POSITION, so a composite key's
+ * columns line up with the columns they reference.
+ */
+function groupMysqlForeignKeys(rows: RowDataPacket[]): Map<string, ForeignKeyInfo[]> {
+  const byTable = new Map<string, ForeignKeyInfo[]>();
+  for (const row of rows) {
+    const tname = row['tbl'] as string;
+    const cname = row['name'] as string;
+    if (!byTable.has(tname)) byTable.set(tname, []);
+    const list = byTable.get(tname)!;
+    let fk = list.find(f => f.name === cname);
+    if (!fk) {
+      fk = {
+        name: cname,
+        columns: [],
+        referencedSchema: (row['ref_schema'] as string) ?? '',
+        referencedTable: (row['ref_tbl'] as string) ?? '',
+        referencedColumns: [],
+      };
+      list.push(fk);
+    }
+    fk.columns.push(row['col'] as string);
+    fk.referencedColumns.push(row['ref_col'] as string);
+  }
+  return byTable;
+}
+
+const MYSQL_FK_SELECT = `SELECT TABLE_NAME AS tbl, CONSTRAINT_NAME AS name, COLUMN_NAME AS col,
+                  REFERENCED_TABLE_SCHEMA AS ref_schema, REFERENCED_TABLE_NAME AS ref_tbl,
+                  REFERENCED_COLUMN_NAME AS ref_col
+           FROM information_schema.KEY_COLUMN_USAGE`;
+
 export class MysqlDriver implements DbDriver {
   readonly queryMode = 'sql' as const;
   private pool: mysql.Pool;
@@ -251,7 +287,7 @@ export class MysqlDriver implements DbDriver {
   async getSchema(schema: string): Promise<SchemaInfo> {
     const conn = await this.pool.getConnection();
     try {
-      const [[tables], [columns], [indexes], [views], [procedures], [triggers]] = await Promise.all([
+      const [[tables], [columns], [indexes], [fks], [views], [procedures], [triggers]] = await Promise.all([
         conn.query<RowDataPacket[]>(
           `SELECT TABLE_NAME AS name, TABLE_ROWS AS row_count, TABLE_COMMENT AS comment
            FROM information_schema.TABLES
@@ -278,6 +314,12 @@ export class MysqlDriver implements DbDriver {
            FROM information_schema.STATISTICS
            WHERE TABLE_SCHEMA = ?
            ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX`,
+          [schema],
+        ),
+        conn.query<RowDataPacket[]>(
+          `${MYSQL_FK_SELECT}
+           WHERE TABLE_SCHEMA = ? AND REFERENCED_TABLE_NAME IS NOT NULL
+           ORDER BY TABLE_NAME, CONSTRAINT_NAME, ORDINAL_POSITION`,
           [schema],
         ),
         conn.query<RowDataPacket[]>(
@@ -316,6 +358,7 @@ export class MysqlDriver implements DbDriver {
       }
 
       const indexesByTable = groupMysqlIndexes(indexes);
+      const fksByTable = groupMysqlForeignKeys(fks);
 
       return {
         tables: tables.map(t => ({
@@ -324,6 +367,7 @@ export class MysqlDriver implements DbDriver {
           comment: (t['comment'] as string) ?? '',
           columns: colsByTable.get(t['name'] as string) ?? [],
           indexes: indexesByTable.get(t['name'] as string) ?? [],
+          foreignKeys: fksByTable.get(t['name'] as string) ?? [],
         })),
         views: views.map(v => v['name'] as string),
         procedures: procedures.map(p => p['name'] as string),
@@ -337,7 +381,7 @@ export class MysqlDriver implements DbDriver {
   async getTable(schema: string, table: string): Promise<TableInfo | null> {
     const conn = await this.pool.getConnection();
     try {
-      const [[tables], [columns], [indexes]] = await Promise.all([
+      const [[tables], [columns], [indexes], [fks]] = await Promise.all([
         conn.query<RowDataPacket[]>(
           `SELECT TABLE_NAME AS name, TABLE_ROWS AS row_count, TABLE_COMMENT AS comment
            FROM information_schema.TABLES
@@ -365,6 +409,12 @@ export class MysqlDriver implements DbDriver {
            ORDER BY INDEX_NAME, SEQ_IN_INDEX`,
           [schema, table],
         ),
+        conn.query<RowDataPacket[]>(
+          `${MYSQL_FK_SELECT}
+           WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND REFERENCED_TABLE_NAME IS NOT NULL
+           ORDER BY CONSTRAINT_NAME, ORDINAL_POSITION`,
+          [schema, table],
+        ),
       ]);
 
       if (tables.length === 0) return null;
@@ -388,6 +438,7 @@ export class MysqlDriver implements DbDriver {
         comment: (t['comment'] as string) ?? '',
         columns: cols,
         indexes: groupMysqlIndexes(indexes).get(table) ?? [],
+        foreignKeys: groupMysqlForeignKeys(fks).get(table) ?? [],
       };
     } finally {
       conn.release();

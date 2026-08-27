@@ -20,12 +20,23 @@ export interface SchemaIndex {
   type: string;
 }
 
+/** One foreign key, described from the referencing table's side. `columns` and `referencedColumns` are parallel. */
+export interface SchemaForeignKey {
+  name: string;
+  columns: string[];
+  /** May differ from the table's own schema — a reference can cross schemas. */
+  referencedSchema: string;
+  referencedTable: string;
+  referencedColumns: string[];
+}
+
 export interface SchemaTable {
   name: string;
   rows: number;
   comment: string;
   columns: SchemaColumn[];
   indexes: SchemaIndex[];
+  foreignKeys: SchemaForeignKey[];
 }
 
 export interface SchemaData {
