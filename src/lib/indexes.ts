@@ -95,20 +95,39 @@ function describeMembership(m: IndexMembership): string {
   return `${m.index} — ${ordinal(m.position)} of ${m.columns.length} columns (${m.columns.join(', ')})`;
 }
 
-function headlineFor(mark: IndexMark): string {
-  if (mark.kind !== 'leading') {
-    return 'Indexed — only as a later column of a composite index; needs the earlier columns filtered too';
-  }
-  // A leading column of a FULLTEXT / gin / 2dsphere / hash index can't be
-  // filtered with an ordinary comparison, so don't promise that it can.
+/**
+ * What each mark colour means. Both entries show in every tooltip — whichever
+ * key a reader hovered, they learn the whole scheme — with the one matching the
+ * hovered column emphasised.
+ */
+export const INDEX_MARK_LEGEND: { kind: IndexMark['kind']; text: string }[] = [
+  { kind: 'leading', text: 'Leftmost column of an index — a filter on this column alone can use it.' },
+  { kind: 'trailing', text: 'Only a later column of a composite index — the earlier columns must be filtered too.' },
+];
+
+/**
+ * A leading column of a FULLTEXT / gin / 2dsphere / hash index can't be reached
+ * by an ordinary comparison, so the legend's promise needs walking back.
+ * Returns null when at least one leading index is a plain b-tree.
+ */
+function caveatFor(mark: IndexMark): string | null {
+  if (mark.kind !== 'leading') return null;
   const leading = mark.memberships.filter(m => m.position === 1);
-  if (leading.every(m => isSpecialType(m.type))) {
-    return `Indexed — leads a ${leading[0].type} index, so only a matching ${leading[0].type} predicate can use it`;
-  }
-  return 'Indexed — a filter on this column alone can use an index';
+  if (!leading.every(m => isSpecialType(m.type))) return null;
+  return `Only a matching ${leading[0].type} predicate can use this index — an ordinary comparison can't.`;
 }
 
-/** Tooltip text for a column header carrying an index mark. */
-export function describeIndexMark(mark: IndexMark): string {
-  return [headlineFor(mark), ...mark.memberships.map(m => `• ${describeMembership(m)}`)].join('\n');
+export interface IndexMarkTooltip {
+  /** One line per index the column belongs to, leftmost membership first. */
+  memberships: string[];
+  /** Qualifies the legend when no leading index is a plain b-tree; null otherwise. */
+  caveat: string | null;
+}
+
+/** Tooltip content for a column header carrying an index mark. */
+export function describeIndexMark(mark: IndexMark): IndexMarkTooltip {
+  return {
+    memberships: mark.memberships.map(describeMembership),
+    caveat: caveatFor(mark),
+  };
 }

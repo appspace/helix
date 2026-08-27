@@ -6,7 +6,7 @@ import { InsertRowDialog } from './InsertRowDialog';
 import { ExplainPlan } from './ExplainPlan';
 import { rowsToCsv, rowsToJson, downloadBlob, sanitizeFilename } from '../export';
 import { formatSqlValue } from '../lib/sql';
-import { indexMarkFor, describeIndexMark } from '../lib/indexes';
+import { indexMarkFor, describeIndexMark, INDEX_MARK_LEGEND } from '../lib/indexes';
 import type { IndexMark } from '../lib/indexes';
 
 // MongoDB documents arrive with nested objects/arrays in cell values.
@@ -389,6 +389,11 @@ export function ResultsTable({ results, resultSets, activeResultIndex = 0, onSel
   const [dragSrc, setDragSrc] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState<string | null>(null);
   const resizeRef = useRef<{ col: string; startX: number; startWidth: number } | null>(null);
+  // Index-mark tooltip: anchored to the hovered key glyph. `indexTipRef` mirrors
+  // the open state for the `th`'s dragstart guard, which runs before React has
+  // re-rendered with the new state.
+  const [indexTip, setIndexTip] = useState<{ x: number; y: number; mark: IndexMark } | null>(null);
+  const indexTipRef = useRef(false);
   // Refs so event-handler closures always see the latest values
   const colWidthsRef = useRef(colWidths);
   const colOrderRef  = useRef(colOrder);
@@ -860,6 +865,11 @@ export function ResultsTable({ results, resultSets, activeResultIndex = 0, onSel
         ref={tableWrapRef}
         tabIndex={0}
         style={{ ...s.tableWrap, outline: 'none' }}
+        onScroll={() => {
+          // The index tooltip is anchored to a viewport position, so a scroll
+          // would leave it pointing at whatever slid under it.
+          if (indexTipRef.current) { indexTipRef.current = false; setIndexTip(null); }
+        }}
         onKeyDown={(e) => {
           if (editing || confirmDelete || confirmUpdate) return;
           const rowCount = filtered.length;
@@ -979,10 +989,6 @@ export function ResultsTable({ results, resultSets, activeResultIndex = 0, onSel
                 const hMeta = results.columnMeta?.find(m => m.name === col);
                 const hComment = commentFor(schemaData, hMeta);
                 const hMark = indexMarkFor(schemaData, hMeta);
-                // Column comment first (it says what the column is), index
-                // detail after — both in the one tooltip the `th` can carry.
-                const hTitle = [hComment, hMark && describeIndexMark(hMark)]
-                  .filter(Boolean).join('\n\n') || undefined;
                 const w = colWidths[col];
                 const isDragSrc  = dragSrc  === col;
                 const isDragOver = dragOver === col && dragSrc !== col;
@@ -991,7 +997,9 @@ export function ResultsTable({ results, resultSets, activeResultIndex = 0, onSel
                     key={col}
                     draggable
                     onDragStart={(e) => {
-                      if (resizeRef.current) { e.preventDefault(); return; }
+                      // Dragstart fires on the draggable `th` even when the
+                      // pointer is over a child, so the key glyph opts out here.
+                      if (resizeRef.current || indexTipRef.current) { e.preventDefault(); return; }
                       setDragSrc(col);
                       e.dataTransfer.effectAllowed = 'move';
                       e.dataTransfer.setData('text/plain', col);
@@ -1014,7 +1022,7 @@ export function ResultsTable({ results, resultSets, activeResultIndex = 0, onSel
                     }}
                     onDragEnd={() => { setDragSrc(null); setDragOver(null); }}
                     onClick={() => { if (!resizeRef.current) handleSort(col); }}
-                    title={hTitle}
+                    title={hComment}
                     style={{
                       ...s.th,
                       cursor: resizingCol ? 'col-resize' : 'grab',
@@ -1030,7 +1038,22 @@ export function ResultsTable({ results, resultSets, activeResultIndex = 0, onSel
                           only shows on short column names is no reminder at all. */}
                       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{col}</span>
                       {hMark && (
-                        <IndexMarkIcon kind={hMark.kind} color={hMark.kind === 'leading' ? t.textAccent : t.textMuted} />
+                        <span
+                          role="img"
+                          aria-label={[
+                            INDEX_MARK_LEGEND.find(l => l.kind === hMark.kind)?.text,
+                            ...describeIndexMark(hMark).memberships,
+                          ].join(' ')}
+                          onMouseEnter={(e) => {
+                            const r = e.currentTarget.getBoundingClientRect();
+                            indexTipRef.current = true;
+                            setIndexTip({ x: r.left, y: r.bottom + 6, mark: hMark });
+                          }}
+                          onMouseLeave={() => { indexTipRef.current = false; setIndexTip(null); }}
+                          style={{ display: 'inline-flex', flex: '0 0 auto', cursor: 'help' }}
+                        >
+                          <IndexMarkIcon kind={hMark.kind} color={hMark.kind === 'leading' ? t.textAccent : t.textMuted} />
+                        </span>
                       )}
                       {sortCol === col && (
                         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={t.accent} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -1224,6 +1247,54 @@ export function ResultsTable({ results, resultSets, activeResultIndex = 0, onSel
           </span>
         </>}
       </div>
+
+      {indexTip && (() => {
+        const tip = describeIndexMark(indexTip.mark);
+        const WIDTH = 300;
+        // Rough height so a header low in the window flips the panel upward
+        // instead of running off the bottom edge.
+        const estHeight = 40 + tip.memberships.length * 16 + INDEX_MARK_LEGEND.length * 32 + (tip.caveat ? 32 : 0);
+        const left = Math.max(8, Math.min(indexTip.x, window.innerWidth - WIDTH - 8));
+        const top = indexTip.y + estHeight > window.innerHeight - 8
+          ? Math.max(8, window.innerHeight - estHeight - 8)
+          : indexTip.y;
+        return (
+          <div
+            style={{
+              position: 'fixed', top, left, zIndex: 100, width: WIDTH,
+              // Purely informational — never let it swallow a click or a hover.
+              pointerEvents: 'none',
+              background: t.bgElevated, border: `1px solid ${t.border}`,
+              borderRadius: 4, boxShadow: t.shadowMd, padding: '8px 10px',
+              fontFamily: '"IBM Plex Sans", sans-serif', fontSize: 11, lineHeight: 1.45,
+            }}
+          >
+            <div style={{ fontSize: 9, letterSpacing: '0.08em', textTransform: 'uppercase', color: t.textMuted, marginBottom: 5 }}>
+              Indexed
+            </div>
+            {tip.memberships.map(line => (
+              <div key={line} style={{ color: t.textPrimary, fontFamily: '"JetBrains Mono", monospace', fontSize: 10.5, marginBottom: 3 }}>
+                {line}
+              </div>
+            ))}
+            <div style={{ height: 1, background: t.borderSubtle, margin: '7px 0' }}/>
+            {INDEX_MARK_LEGEND.map(({ kind, text }) => {
+              const active = kind === indexTip.mark.kind;
+              return (
+                <div key={kind} style={{ display: 'flex', gap: 6, marginBottom: 3, opacity: active ? 1 : 0.45 }}>
+                  <span style={{ display: 'inline-flex', paddingTop: 2 }}>
+                    <IndexMarkIcon kind={kind} color={kind === 'leading' ? t.textAccent : t.textMuted} />
+                  </span>
+                  <span style={{ color: active ? t.textPrimary : t.textSecondary }}>{text}</span>
+                </div>
+              );
+            })}
+            {tip.caveat && (
+              <div style={{ marginTop: 6, color: t.colorWarning }}>{tip.caveat}</div>
+            )}
+          </div>
+        );
+      })()}
 
       {contextMenu && (() => {
         const { target, reason } = resolveDeleteTarget(contextMenu.row, results.columnMeta);
