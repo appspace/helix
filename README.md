@@ -8,7 +8,7 @@ A MySQL database management web app — a browser-based alternative to MySQL Wor
 
 - SQL query editor with line numbers and `Ctrl+Enter` to run
 - Schema browser — collapsible tree of tables, columns (with types and PK indicators), views, procedures, triggers
-- Query results grid — sortable columns, row selection, NULL highlighting, execution time, index marks on indexed column headers (accent = the column leads an index, muted = it only sits deeper in a composite one; hover for the index names)
+- Query results grid — sortable columns, row selection, NULL highlighting, execution time, index marks on indexed column headers (green = the column leads an index, grey = it only sits deeper in a composite one; hover the key for the index names and what the colours mean)
 - Multi-tab query workspace
 - Connection manager modal (host, port, user, password, SSL)
 - Dark and light theme toggle

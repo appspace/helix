@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { indexMarkFor, describeIndexMark } from './indexes';
+import { indexMarkFor, describeIndexMark, INDEX_MARK_LEGEND } from './indexes';
 import type { ColumnMeta, SchemaData, SchemaIndex } from '../api';
 
 function schema(indexes: SchemaIndex[]): SchemaData {
@@ -78,49 +78,61 @@ describe('indexMarkFor', () => {
 
 describe('describeIndexMark', () => {
   it('describes a single-column unique index', () => {
-    const text = describeIndexMark(indexMarkFor(schema([PRIMARY]), meta('id'))!);
-    expect(text).toBe(
-      'Indexed — a filter on this column alone can use an index\n• PRIMARY — unique index',
-    );
+    const tip = describeIndexMark(indexMarkFor(schema([PRIMARY]), meta('id'))!);
+    expect(tip.memberships).toEqual(['PRIMARY — unique index']);
+    expect(tip.caveat).toBeNull();
   });
 
   it('describes a trailing composite position with the full column list', () => {
-    const text = describeIndexMark(indexMarkFor(schema([COMPOSITE]), meta('created_at'))!);
-    expect(text).toContain('only as a later column of a composite index');
-    expect(text).toContain('• idx_user_created — 2nd of 2 columns (user_id, created_at)');
+    const tip = describeIndexMark(indexMarkFor(schema([COMPOSITE]), meta('created_at'))!);
+    expect(tip.memberships).toEqual(['idx_user_created — 2nd of 2 columns (user_id, created_at)']);
   });
 
   it('names a non-btree access method', () => {
     const fulltext: SchemaIndex = { name: 'idx_body', unique: false, columns: ['body'], type: 'FULLTEXT' };
-    const text = describeIndexMark(indexMarkFor(schema([fulltext]), meta('body'))!);
-    expect(text).toContain('• idx_body — index FULLTEXT');
+    const tip = describeIndexMark(indexMarkFor(schema([fulltext]), meta('body'))!);
+    expect(tip.memberships).toEqual(['idx_body — index FULLTEXT']);
   });
 
-  it('does not promise a plain filter works when the only leading index is non-btree', () => {
+  it('caveats a leading column whose only index is non-btree', () => {
     const fulltext: SchemaIndex = { name: 'idx_body', unique: false, columns: ['body'], type: 'FULLTEXT' };
-    const text = describeIndexMark(indexMarkFor(schema([fulltext]), meta('body'))!);
-    expect(text).toContain('leads a FULLTEXT index, so only a matching FULLTEXT predicate can use it');
+    const tip = describeIndexMark(indexMarkFor(schema([fulltext]), meta('body'))!);
+    expect(tip.caveat).toBe("Only a matching FULLTEXT predicate can use this index — an ordinary comparison can't.");
   });
 
-  it('keeps the plain-filter headline when the column also leads a btree index', () => {
+  it('drops the caveat when the column also leads a btree index', () => {
     const indexes: SchemaIndex[] = [
       { name: 'idx_body', unique: false, columns: ['body'], type: 'FULLTEXT' },
       { name: 'idx_body_btree', unique: false, columns: ['body'], type: 'BTREE' },
     ];
-    const text = describeIndexMark(indexMarkFor(schema(indexes), meta('body'))!);
-    expect(text).toContain('a filter on this column alone can use an index');
+    const tip = describeIndexMark(indexMarkFor(schema(indexes), meta('body'))!);
+    expect(tip.caveat).toBeNull();
+  });
+
+  it('never caveats a trailing column — the legend already says it needs help', () => {
+    const fulltext: SchemaIndex = { name: 'idx_pair', unique: false, columns: ['other', 'body'], type: 'FULLTEXT' };
+    const tip = describeIndexMark(indexMarkFor(schema([fulltext]), meta('body'))!);
+    expect(tip.caveat).toBeNull();
   });
 
   it('leaves the default btree access method unnamed', () => {
     const lower: SchemaIndex = { name: 'idx_total', unique: false, columns: ['total'], type: 'btree' };
-    const text = describeIndexMark(indexMarkFor(schema([lower]), meta('total'))!);
-    expect(text).toContain('• idx_total — index');
-    expect(text).not.toContain('btree');
+    const tip = describeIndexMark(indexMarkFor(schema([lower]), meta('total'))!);
+    expect(tip.memberships).toEqual(['idx_total — index']);
   });
 
   it('lists one line per index for a column in several indexes', () => {
     const many = schema([COMPOSITE, { name: 'idx_created', unique: false, columns: ['created_at'], type: 'BTREE' }]);
-    const text = describeIndexMark(indexMarkFor(many, meta('created_at'))!);
-    expect(text.split('\n')).toHaveLength(3);
+    const tip = describeIndexMark(indexMarkFor(many, meta('created_at'))!);
+    expect(tip.memberships).toEqual([
+      'idx_created — index',
+      'idx_user_created — 2nd of 2 columns (user_id, created_at)',
+    ]);
+  });
+});
+
+describe('INDEX_MARK_LEGEND', () => {
+  it('covers both mark kinds, leading first', () => {
+    expect(INDEX_MARK_LEGEND.map(l => l.kind)).toEqual(['leading', 'trailing']);
   });
 });
