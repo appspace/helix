@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import type { Theme } from '../theme';
 import type { SchemaData } from '../api';
@@ -49,6 +49,9 @@ export function ErdView({ schema, activeSchema, table, onOpenTable, onClose, t }
     () => layoutErd(
       model.tables.map(tb => ({ table: tb.name, width: tb.width, height: tb.height })),
       model.relations,
+      // A focused diagram is about its table, so that table holds the middle
+      // even when a neighbour has more relationships of its own.
+      { centre: model.focus || null },
     ),
     [model],
   );
@@ -65,6 +68,12 @@ export function ErdView({ schema, activeSchema, table, onOpenTable, onClose, t }
   const [panned, setPanned] = useState<{ of: ErdLayout; transform: Transform } | null>(null);
 
   const [viewSize, setViewSize] = useState({ width: 0, height: 0 });
+  // Measure as the canvas attaches, not in an effect: a first paint at the
+  // wrong scale shows the diagram jumping into place as it opens.
+  const attachView = useCallback((el: HTMLDivElement | null) => {
+    viewRef.current = el;
+    if (el) setViewSize({ width: el.clientWidth, height: el.clientHeight });
+  }, []);
   useEffect(() => {
     const el = viewRef.current;
     if (!el) return;
@@ -187,7 +196,7 @@ export function ErdView({ schema, activeSchema, table, onOpenTable, onClose, t }
         </div>
 
         <div
-          ref={viewRef}
+          ref={attachView}
           style={s.canvas}
           onWheel={onWheel}
           onMouseDown={(e) => onMouseDown(e, null)}

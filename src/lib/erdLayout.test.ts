@@ -10,11 +10,12 @@ function byName(nodes: ErdLayoutNode[]): Record<string, ErdLayoutNode> {
   return Object.fromEntries(nodes.map(n => [n.table, n]));
 }
 
+function centre(node: ErdLayoutNode): { x: number; y: number } {
+  return { x: node.x + node.width / 2, y: node.y + node.height / 2 };
+}
+
 function centreDistance(a: ErdLayoutNode, b: ErdLayoutNode): number {
-  return Math.hypot(
-    (a.x + a.width / 2) - (b.x + b.width / 2),
-    (a.y + a.height / 2) - (b.y + b.height / 2),
-  );
+  return Math.hypot(centre(a).x - centre(b).x, centre(a).y - centre(b).y);
 }
 
 function overlaps(a: ErdLayoutNode, b: ErdLayoutNode): boolean {
@@ -22,15 +23,34 @@ function overlaps(a: ErdLayoutNode, b: ErdLayoutNode): boolean {
     && a.y < b.y + b.height && b.y < a.y + a.height;
 }
 
+function expectNoOverlaps(nodes: ErdLayoutNode[]): void {
+  for (let i = 0; i < nodes.length; i++) {
+    for (let j = i + 1; j < nodes.length; j++) {
+      expect(overlaps(nodes[i], nodes[j]), `${nodes[i].table} overlaps ${nodes[j].table}`).toBe(false);
+    }
+  }
+}
+
+/** A hub with `spokes` tables pointing at it, plus any unconnected extras. */
+function hubAndSpokes(spokes: number, orphans = 0): { boxes: ErdLayoutBox[]; edges: ErdLayoutEdge[] } {
+  const names = ['hub', ...Array.from({ length: spokes }, (_, i) => `spoke_${i}`)];
+  const extras = Array.from({ length: orphans }, (_, i) => `orphan_${i}`);
+  return {
+    boxes: boxes(...names, ...extras),
+    edges: Array.from({ length: spokes }, (_, i) => ({ from: `spoke_${i}`, to: 'hub' })),
+  };
+}
+
 describe('layoutErd', () => {
   it('returns nothing for an empty schema', () => {
-    expect(layoutErd([], [])).toEqual({ nodes: [], width: 0, height: 0 });
+    expect(layoutErd([], [])).toEqual({ nodes: [], width: 0, height: 0, centre: '' });
   });
 
   it('places a lone table at the margin', () => {
-    const { nodes, width, height } = layoutErd(boxes('users'), []);
+    const { nodes, width, height, centre: hub } = layoutErd(boxes('users'), []);
     expect(nodes).toEqual([{ table: 'users', width: 180, height: 90, x: 40, y: 40 }]);
     expect({ width, height }).toEqual({ width: 260, height: 170 });
+    expect(hub).toBe('users');
   });
 
   it('keeps one node per table and preserves the box sizes it was given', () => {
@@ -79,20 +99,138 @@ describe('layoutErd', () => {
       { from: 'b', to: 'a' }, { from: 'c', to: 'a' }, { from: 'd', to: 'a' },
       { from: 'e', to: 'a' }, { from: 'f', to: 'a' }, { from: 'g', to: 'b' },
     ];
-    const { nodes } = layoutErd(b, e);
-    for (let i = 0; i < nodes.length; i++) {
-      for (let j = i + 1; j < nodes.length; j++) {
-        expect(overlaps(nodes[i], nodes[j])).toBe(false);
+    expectNoOverlaps(layoutErd(b, e).nodes);
+  });
+});
+
+describe('layoutErd — the centre', () => {
+  it('builds the diagram around the most-connected table', () => {
+    const { boxes: b, edges } = hubAndSpokes(5);
+    expect(layoutErd(b, edges).centre).toBe('hub');
+  });
+
+  it('honours a requested centre even when another table has more relationships', () => {
+    const { boxes: b, edges } = hubAndSpokes(5);
+    const layout = layoutErd(b, edges, { centre: 'spoke_2' });
+    expect(layout.centre).toBe('spoke_2');
+  });
+
+  it('falls back to the most-connected table when the requested one is not on the diagram', () => {
+    const { boxes: b, edges } = hubAndSpokes(5);
+    expect(layoutErd(b, edges, { centre: 'ghost' }).centre).toBe('hub');
+    expect(layoutErd(b, edges, { centre: null }).centre).toBe('hub');
+  });
+
+  it('puts the centre table in the middle of the diagram', () => {
+    const { boxes: b, edges } = hubAndSpokes(24);
+    const layout = layoutErd(b, edges);
+    const hub = centre(byName(layout.nodes)['hub']);
+    // Within a tenth of the diagram of dead centre on both axes.
+    expect(Math.abs(hub.x - layout.width / 2)).toBeLessThan(layout.width * 0.1);
+    expect(Math.abs(hub.y - layout.height / 2)).toBeLessThan(layout.height * 0.1);
+  });
+
+  it('surrounds the centre rather than stacking beside it', () => {
+    const { boxes: b, edges } = hubAndSpokes(16);
+    const layout = layoutErd(b, edges);
+    const hub = centre(byName(layout.nodes)['hub']);
+    const spokes = layout.nodes.filter(n => n.table !== 'hub').map(centre);
+    // Spokes on every side: at least a quarter of them left, right, above and below.
+    const quarter = spokes.length / 4;
+    expect(spokes.filter(s => s.x < hub.x).length).toBeGreaterThanOrEqual(quarter);
+    expect(spokes.filter(s => s.x > hub.x).length).toBeGreaterThanOrEqual(quarter);
+    expect(spokes.filter(s => s.y < hub.y).length).toBeGreaterThanOrEqual(quarter);
+    expect(spokes.filter(s => s.y > hub.y).length).toBeGreaterThanOrEqual(quarter);
+  });
+
+  it('keeps a crowded schema roughly square instead of unfolding it into a column', () => {
+    // The regression this layout exists for: 60 dependants and a tail of
+    // unconnected tables used to separate almost entirely along Y, producing a
+    // tall spike of a diagram.
+    const { boxes: b, edges } = hubAndSpokes(60, 20);
+    const layout = layoutErd(b, edges);
+    const aspect = Math.max(layout.width, layout.height) / Math.min(layout.width, layout.height);
+    expect(aspect).toBeLessThan(1.8);
+    expectNoOverlaps(layout.nodes);
+  });
+
+  it('keeps unconnected tables outside the bulk of the connected ones', () => {
+    const { boxes: b, edges } = hubAndSpokes(6, 4);
+    const nodes = byName(layoutErd(b, edges).nodes);
+    const hub = nodes['hub'];
+    const spokes = [0, 1, 2, 3, 4, 5].map(i => centreDistance(hub, nodes[`spoke_${i}`])).sort((a, c) => a - c);
+    const median = spokes[Math.floor(spokes.length / 2)];
+    // The rim is measured against the bulk of the diagram rather than its
+    // furthest point, so an orphan may sit level with an outlying spoke — but
+    // never among the tables that actually reference the centre.
+    for (const i of [0, 1, 2, 3]) {
+      expect(centreDistance(hub, nodes[`orphan_${i}`])).toBeGreaterThan(median);
+    }
+  });
+
+  it('places a second hop beyond the first', () => {
+    const b = boxes('hub', 'near', 'far');
+    const nodes = byName(layoutErd(b, [{ from: 'near', to: 'hub' }, { from: 'far', to: 'near' }]).nodes);
+    expect(centreDistance(nodes['hub'], nodes['far'])).toBeGreaterThan(centreDistance(nodes['hub'], nodes['near']));
+  });
+});
+
+describe('layoutErd — clusters', () => {
+  // Eight dependants of the centre, each carrying a cluster of four. The centre
+  // keeps the most relationships so it stays the centre.
+  const BRANCHES = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+  const LEAVES = 4;
+
+  function clustered(): { boxes: ErdLayoutBox[]; edges: ErdLayoutEdge[] } {
+    const names = ['hub', ...BRANCHES, ...BRANCHES.flatMap(x => Array.from({ length: LEAVES }, (_, i) => `${x}_${i}`))];
+    return {
+      boxes: boxes(...names),
+      edges: [
+        ...BRANCHES.map(x => ({ from: x, to: 'hub' })),
+        ...BRANCHES.flatMap(x => Array.from({ length: LEAVES }, (_, i) => ({ from: `${x}_${i}`, to: x }))),
+      ],
+    };
+  }
+
+  /** Angle of a table as seen from the middle of the diagram. */
+  function angles(layout: ReturnType<typeof layoutErd>) {
+    const nodes = byName(layout.nodes);
+    return (table: string) => Math.atan2(
+      centre(nodes[table]).y - layout.height / 2,
+      centre(nodes[table]).x - layout.width / 2,
+    );
+  }
+
+  function angleBetween(a: number, b: number): number {
+    return Math.abs(((a - b + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI);
+  }
+
+  it('gathers a table\'s dependants around it rather than around the diagram', () => {
+    const { boxes: b, edges } = clustered();
+    const layout = layoutErd(b, edges);
+    const angleOf = angles(layout);
+    expect(layout.centre).toBe('hub');
+    for (const branch of BRANCHES) {
+      for (let i = 0; i < LEAVES; i++) {
+        // Within a sixth of a turn of the table they belong to.
+        expect(angleBetween(angleOf(`${branch}_${i}`), angleOf(branch))).toBeLessThan(Math.PI / 3);
       }
     }
   });
 
-  it('pulls tables joined by a foreign key closer than unrelated ones', () => {
-    const linked = layoutErd(boxes('orders', 'users'), [{ from: 'orders', to: 'users' }]).nodes;
-    const loose = layoutErd(boxes('orders', 'users'), []).nodes;
-    expect(centreDistance(linked[0], linked[1])).toBeLessThan(centreDistance(loose[0], loose[1]));
+  it('sits a cluster nearer its own table than the diagram centre', () => {
+    const { boxes: b, edges } = clustered();
+    const nodes = byName(layoutErd(b, edges).nodes);
+    for (const branch of BRANCHES) {
+      for (let i = 0; i < LEAVES; i++) {
+        const leaf = nodes[`${branch}_${i}`];
+        expect(centreDistance(leaf, nodes[branch])).toBeLessThan(centreDistance(leaf, nodes['hub']));
+      }
+    }
   });
+});
 
+describe('layoutErd — edge cases', () => {
   it('ignores a self-reference rather than collapsing the node', () => {
     const { nodes } = layoutErd(boxes('employees', 'departments'), [
       { from: 'employees', to: 'employees' },
@@ -102,7 +240,7 @@ describe('layoutErd', () => {
       expect(Number.isFinite(n.x)).toBe(true);
       expect(Number.isFinite(n.y)).toBe(true);
     }
-    expect(overlaps(nodes[0], nodes[1])).toBe(false);
+    expectNoOverlaps(nodes);
   });
 
   it('ignores an edge pointing at a table outside the diagram', () => {
@@ -115,12 +253,18 @@ describe('layoutErd', () => {
   });
 
   it('separates tables that share no foreign keys at all', () => {
-    const { nodes } = layoutErd(boxes('a', 'b', 'c', 'd', 'e'), []);
-    for (let i = 0; i < nodes.length; i++) {
-      for (let j = i + 1; j < nodes.length; j++) {
-        expect(overlaps(nodes[i], nodes[j])).toBe(false);
-      }
-    }
+    expectNoOverlaps(layoutErd(boxes('a', 'b', 'c', 'd', 'e'), []).nodes);
+  });
+
+  it('handles a long chain without exploding the diagram', () => {
+    const names = Array.from({ length: 15 }, (_, i) => `t${i}`);
+    const edges = names.slice(1).map((name, i) => ({ from: name, to: names[i] }));
+    const layout = layoutErd(boxes(...names), edges);
+    expectNoOverlaps(layout.nodes);
+    // A chain is inherently long, but it should stay in the same order of
+    // magnitude as the boxes themselves rather than growing exponentially.
+    expect(layout.width).toBeLessThan(180 * names.length * 2);
+    expect(layout.height).toBeLessThan(180 * names.length * 2);
   });
 });
 
