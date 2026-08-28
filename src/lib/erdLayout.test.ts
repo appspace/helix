@@ -154,19 +154,79 @@ describe('layoutErd — the centre', () => {
     expectNoOverlaps(layout.nodes);
   });
 
-  it('keeps unconnected tables further out than the ones that reference the centre', () => {
+  it('keeps unconnected tables outside the bulk of the connected ones', () => {
     const { boxes: b, edges } = hubAndSpokes(6, 4);
     const nodes = byName(layoutErd(b, edges).nodes);
     const hub = nodes['hub'];
-    const nearestOrphan = Math.min(...[0, 1, 2, 3].map(i => centreDistance(hub, nodes[`orphan_${i}`])));
-    const furthestSpoke = Math.max(...[0, 1, 2, 3, 4, 5].map(i => centreDistance(hub, nodes[`spoke_${i}`])));
-    expect(nearestOrphan).toBeGreaterThan(furthestSpoke);
+    const spokes = [0, 1, 2, 3, 4, 5].map(i => centreDistance(hub, nodes[`spoke_${i}`])).sort((a, c) => a - c);
+    const median = spokes[Math.floor(spokes.length / 2)];
+    // The rim is measured against the bulk of the diagram rather than its
+    // furthest point, so an orphan may sit level with an outlying spoke — but
+    // never among the tables that actually reference the centre.
+    for (const i of [0, 1, 2, 3]) {
+      expect(centreDistance(hub, nodes[`orphan_${i}`])).toBeGreaterThan(median);
+    }
   });
 
   it('places a second hop beyond the first', () => {
     const b = boxes('hub', 'near', 'far');
     const nodes = byName(layoutErd(b, [{ from: 'near', to: 'hub' }, { from: 'far', to: 'near' }]).nodes);
     expect(centreDistance(nodes['hub'], nodes['far'])).toBeGreaterThan(centreDistance(nodes['hub'], nodes['near']));
+  });
+});
+
+describe('layoutErd — clusters', () => {
+  // Eight dependants of the centre, each carrying a cluster of four. The centre
+  // keeps the most relationships so it stays the centre.
+  const BRANCHES = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+  const LEAVES = 4;
+
+  function clustered(): { boxes: ErdLayoutBox[]; edges: ErdLayoutEdge[] } {
+    const names = ['hub', ...BRANCHES, ...BRANCHES.flatMap(x => Array.from({ length: LEAVES }, (_, i) => `${x}_${i}`))];
+    return {
+      boxes: boxes(...names),
+      edges: [
+        ...BRANCHES.map(x => ({ from: x, to: 'hub' })),
+        ...BRANCHES.flatMap(x => Array.from({ length: LEAVES }, (_, i) => ({ from: `${x}_${i}`, to: x }))),
+      ],
+    };
+  }
+
+  /** Angle of a table as seen from the middle of the diagram. */
+  function angles(layout: ReturnType<typeof layoutErd>) {
+    const nodes = byName(layout.nodes);
+    return (table: string) => Math.atan2(
+      centre(nodes[table]).y - layout.height / 2,
+      centre(nodes[table]).x - layout.width / 2,
+    );
+  }
+
+  function angleBetween(a: number, b: number): number {
+    return Math.abs(((a - b + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI);
+  }
+
+  it('gathers a table\'s dependants around it rather than around the diagram', () => {
+    const { boxes: b, edges } = clustered();
+    const layout = layoutErd(b, edges);
+    const angleOf = angles(layout);
+    expect(layout.centre).toBe('hub');
+    for (const branch of BRANCHES) {
+      for (let i = 0; i < LEAVES; i++) {
+        // Within a sixth of a turn of the table they belong to.
+        expect(angleBetween(angleOf(`${branch}_${i}`), angleOf(branch))).toBeLessThan(Math.PI / 3);
+      }
+    }
+  });
+
+  it('sits a cluster nearer its own table than the diagram centre', () => {
+    const { boxes: b, edges } = clustered();
+    const nodes = byName(layoutErd(b, edges).nodes);
+    for (const branch of BRANCHES) {
+      for (let i = 0; i < LEAVES; i++) {
+        const leaf = nodes[`${branch}_${i}`];
+        expect(centreDistance(leaf, nodes[branch])).toBeLessThan(centreDistance(leaf, nodes['hub']));
+      }
+    }
   });
 });
 

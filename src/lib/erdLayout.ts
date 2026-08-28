@@ -1,19 +1,26 @@
 /**
- * Radial placement for the foreign-key diagram.
+ * Radial, cluster-first placement for the foreign-key diagram.
  *
- * The diagram has a centre — the focus table, or the most-connected one — and
- * everything else radiates outward from it in rings, one ring per hop. A ring
- * that can't hold its tables spills into another row further out rather than
- * inflating, so a hub with sixty dependants becomes a few tight rows around it
- * instead of one enormous circle. Within a ring, tables are ordered by their
- * parent's angle, which keeps each cluster of dependants together.
+ * The diagram has a centre — the focus table, or the most-connected one. Its
+ * dependants ring it, and from there every table's own dependants fan out
+ * *from that table*, pointing away from the centre, in the wedge of the circle
+ * its subtree was given. So a cluster is drawn as a cluster: `shipment` and the
+ * dozen tables that reference it sit together in their own quarter, rather than
+ * being smeared around a shared ring with everyone else at the same hop.
  *
- * The earlier version seeded on a spiral, relaxed with a force simulation, and
- * separated overlaps along whichever axis two boxes overlapped least. Table
- * boxes are far wider than they are tall, so that axis was nearly always the
- * vertical one: a crowded schema collapsed under gravity and then unfolded into
- * a tall column with a spike on top. Both the rings and the centre-line
- * separation below exist to remove any preferred axis.
+ * The wedge each table gets is proportional to the arc its whole subtree needs,
+ * so a busy branch is given room and a leaf isn't. A cluster too big for its
+ * wedge stacks into two or three rows inside it rather than borrowing arc from
+ * its neighbours. Tables with no foreign keys at all sit in a band around the
+ * rim, out of the way of the structure.
+ *
+ * Two earlier versions are worth remembering. A spiral seed relaxed by a force
+ * simulation collapsed under gravity, and the overlap pass then unfolded the
+ * pile along whichever axis two boxes overlapped least — nearly always the
+ * vertical one, table boxes being far wider than tall — so a real schema came
+ * out as a tall plume. Plain rings fixed the shape but not the reading: a
+ * table's dependants spanned a median arc of 187° of the diagram. Hence both
+ * the fans below and the centre-line separation, which has no preferred axis.
  *
  * Deliberately deterministic — no randomness anywhere — so reopening the
  * diagram for the same schema gives the same picture, and the tests can assert
@@ -59,6 +66,8 @@ const MARGIN = 40;
 const GAP = 28;
 /** Extra breathing room between a parent's ring of children and the next one out. */
 const RING_PADDING = 18;
+/** How many rows a cluster may stack inside its own wedge before the wedge just gets wider. */
+const MAX_CLUSTER_ROWS = 3;
 
 /** Radius of the circle that encloses a box — what the packing works in. */
 function boxRadius(box: ErdLayoutBox): number {
@@ -100,6 +109,10 @@ function buildGraph(boxes: ErdLayoutBox[], edges: ErdLayoutEdge[], preferredCent
 interface Placement {
   level: number[];
   parent: number[];
+  /** Dependants of each table, in the order they were reached. */
+  children: number[][];
+  /** Breadth-first visit order, roots first. */
+  order: number[];
   /** Deepest ring reachable from the hub; anything beyond is an unconnected table. */
   mainDepth: number;
 }
@@ -114,15 +127,19 @@ function assignRings(adjacency: number[][], hub: number): Placement {
   const n = adjacency.length;
   const level = new Array<number>(n).fill(-1);
   const parent = new Array<number>(n).fill(-1);
+  const children: number[][] = Array.from({ length: n }, () => []);
+  const order: number[] = [];
   level[hub] = 0;
 
   const walk = (queue: number[]) => {
     for (let head = 0; head < queue.length; head++) {
       const v = queue[head];
+      order.push(v);
       for (const w of adjacency[v]) {
         if (level[w] !== -1) continue;
         level[w] = level[v] + 1;
         parent[w] = v;
+        children[v].push(w);
         queue.push(w);
       }
     }
@@ -139,10 +156,11 @@ function assignRings(adjacency: number[][], hub: number): Placement {
     if (level[root] !== -1) continue;
     level[root] = mainDepth + 1;
     parent[root] = hub;
+    children[hub].push(root);
     walk([root]);
   }
 
-  return { level, parent, mainDepth };
+  return { level, parent, children, order, mainDepth };
 }
 
 /** Distance from the centre to a box's far corner. */
@@ -151,67 +169,146 @@ function reachOf(box: ErdLayoutBox, x: number, y: number): number {
 }
 
 /**
- * Walk each ring around the centre, placing tables shoulder to shoulder by arc
- * length. When a lap runs out of circumference the radius steps out and the
- * walk continues, so a hub with sixty dependants becomes a few tight laps
- * rather than one enormous circle. Tables are ordered by their parent's angle,
- * which keeps a cluster of dependants together and roughly under its parent.
- *
- * Tables with no foreign keys at all go last, in a band around the rim of the
- * connected diagram. The band is measured against the bulk of that diagram
- * rather than its furthest point, so one long chain of references doesn't
- * banish them to a circle twice the size of everything else.
+ * How much arc a subtree needs: enough for the table itself, or for everything
+ * hanging off it, whichever is greater. Sectors are handed out in proportion to
+ * this, so a table with a big cluster of dependants gets a wide wedge and a
+ * leaf gets a narrow one.
  */
-function placeRings(
+function arcDemand(boxes: ErdLayoutBox[], children: number[][], order: number[]): number[] {
+  const demand = boxes.map(b => b.width + GAP);
+  // `order` is breadth-first, so walking it backwards visits children first.
+  for (let i = order.length - 1; i >= 0; i--) {
+    const v = order[i];
+    let below = 0;
+    for (const c of children[v]) below += demand[c];
+    demand[v] = Math.max(demand[v], below);
+  }
+  return demand;
+}
+
+/** Widest fan a cluster may open, so it never wraps back over its own parent. */
+const MAX_FAN_ANGLE = Math.PI * 1.2;
+
+/**
+ * Arrange `members` on an arc around a point, filling the given angular span
+ * and stacking into further rows when one arc can't hold them all. Each member
+ * keeps the slice of the span it was given, which is what its own dependants
+ * fan out into later.
+ */
+function fanOut(
   boxes: ErdLayoutBox[],
-  { level, parent, mainDepth }: Placement,
+  members: number[],
+  demand: number[],
+  sectorStart: Float64Array,
+  sectorSpan: Float64Array,
+  px: Float64Array,
+  py: Float64Array,
+  layout: { originX: number; originY: number; from: number; span: number; distance: number; rowStep: number },
+): void {
+  if (members.length === 0) return;
+  const { originX, originY, from, span, distance, rowStep } = layout;
+
+  const needed = members.reduce((sum, c) => sum + boxes[c].width + GAP, 0);
+  const rows = Math.max(1, Math.min(MAX_CLUSTER_ROWS, Math.ceil(needed / Math.max(span * distance, 1))));
+  const perRow = needed / rows;
+
+  const rowMembers: number[][] = Array.from({ length: rows }, () => []);
+  let row = 0;
+  let filled = 0;
+  for (const c of members) {
+    const cost = boxes[c].width + GAP;
+    if (row < rows - 1 && filled > 0 && filled + cost > perRow) { row++; filled = 0; }
+    rowMembers[row].push(c);
+    filled += cost;
+  }
+
+  rowMembers.forEach((inRow, i) => {
+    if (inRow.length === 0) return;
+    const rowRadius = distance + i * rowStep;
+    const total = inRow.reduce((sum, c) => sum + demand[c], 0) || 1;
+    let cursor = from;
+    for (const c of inRow) {
+      const slice = (demand[c] / total) * span;
+      sectorStart[c] = cursor;
+      sectorSpan[c] = slice;
+      const angle = cursor + slice / 2;
+      px[c] = originX + rowRadius * Math.cos(angle);
+      py[c] = originY + rowRadius * Math.sin(angle);
+      cursor += slice;
+    }
+  });
+}
+
+/**
+ * Place the connected tables: the centre's dependants ring it, and every
+ * cluster past that fans out from the table it belongs to.
+ *
+ * Each table owns an angular sector, split among its dependants in proportion
+ * to the arc their own subtrees need, so a cluster keeps its own wedge of the
+ * diagram. Where a wedge is too narrow for a cluster, it stacks into rows
+ * inside that wedge rather than borrowing arc from its neighbours.
+ */
+function placeClusters(
+  boxes: ErdLayoutBox[],
+  { level, parent, children, mainDepth, order }: Placement,
   hub: number,
   px: Float64Array,
   py: Float64Array,
 ): { rimRadius: number } {
-  const angle = new Float64Array(boxes.length);
-  const depth = Math.max(...level);
+  const demand = arcDemand(boxes, children, order);
+  const sectorStart = new Float64Array(boxes.length);
+  const sectorSpan = new Float64Array(boxes.length);
+  sectorStart[hub] = 0;
+  sectorSpan[hub] = Math.PI * 2;
+
   let radius = boxRadius(boxes[hub]) + GAP + RING_PADDING;
 
-  /** Place `members` shoulder to shoulder from `radius` outward, in laps. */
-  const walkRing = (members: number[]) => {
-    let cursor = angle[parent[members[0]] < 0 ? hub : parent[members[0]]];
-    let lapUsed = 0;
-    let lapTallest = 0;
-
-    for (const node of members) {
-      const needed = (boxes[node].width + GAP) / radius;
-      // A lap that would wrap past its own start steps out to the next one.
-      if (lapUsed > 0 && lapUsed + needed > Math.PI * 2) {
-        radius += lapTallest + GAP;
-        lapUsed = 0;
-        lapTallest = 0;
-      }
-      const span = (boxes[node].width + GAP) / radius;
-      const a = cursor + span / 2;
-      angle[node] = a;
-      px[node] = radius * Math.cos(a);
-      py[node] = radius * Math.sin(a);
-      cursor += span;
-      lapUsed += span;
-      lapTallest = Math.max(lapTallest, boxes[node].height);
+  for (let ring = 1; ring <= mainDepth; ring++) {
+    const parents: number[] = [];
+    for (let i = 0; i < boxes.length; i++) {
+      if (level[i] === ring - 1 && children[i].some(c => level[c] === ring)) parents.push(i);
     }
-    radius += lapTallest + GAP + RING_PADDING;
-  };
+    if (parents.length === 0) continue;
 
-  for (let ring = 1; ring <= Math.min(depth, mainDepth); ring++) {
-    const members: number[] = [];
-    for (let i = 0; i < boxes.length; i++) if (level[i] === ring) members.push(i);
-    if (members.length === 0) continue;
-    // Ordering by the parent's angle is what keeps siblings adjacent; the index
-    // tiebreak keeps it deterministic.
-    members.sort((a, b) => angle[parent[a]] - angle[parent[b]] || a - b);
-    walkRing(members);
+    let tallest = 0;
+    let ringArc = 0;
+    for (let i = 0; i < boxes.length; i++) {
+      if (level[i] !== ring) continue;
+      ringArc += boxes[i].width + GAP;
+      tallest = Math.max(tallest, boxes[i].height);
+    }
+
+    if (ring === 1) {
+      // The centre's own dependants ring it, stacking into rows when one lap
+      // can't hold them. Wide enough for the ring, counting those rows.
+      radius = Math.max(radius, ringArc / (Math.PI * 2 * MAX_CLUSTER_ROWS));
+      fanOut(boxes, children[hub], demand, sectorStart, sectorSpan, px, py, {
+        originX: 0, originY: 0, from: 0, span: Math.PI * 2, distance: radius, rowStep: tallest + GAP,
+      });
+      continue;
+    }
+
+    // Deeper rings cluster around the table they belong to: each parent's
+    // dependants fan out from it, pointing away from the centre. This is what
+    // makes a cluster read as a cluster instead of another arc of a ring.
+    for (const p of parents) {
+      const kids = children[p].filter(c => level[c] === ring);
+      const outward = Math.atan2(py[p], px[p]);
+      // The parent's share of the circle, but never so wide that the fan wraps
+      // back over the parent itself.
+      const wedge = Math.min(sectorSpan[p], MAX_FAN_ANGLE);
+      const widestKid = Math.max(...kids.map(c => boxRadius(boxes[c])));
+      const distance = boxRadius(boxes[p]) + widestKid + GAP + RING_PADDING;
+      fanOut(boxes, kids, demand, sectorStart, sectorSpan, px, py, {
+        originX: px[p], originY: py[p], from: outward - wedge / 2, span: wedge,
+        distance, rowStep: tallest + GAP,
+      });
+    }
   }
 
   // Where the connected diagram mostly ends: the 75th percentile of how far its
-  // tables reach, so a single long arm doesn't set the radius for everything.
-  const reaches = [];
+  // tables reach, so a single long chain doesn't set the radius for everything.
+  const reaches: number[] = [];
   for (let i = 0; i < boxes.length; i++) {
     if (level[i] <= mainDepth) reaches.push(reachOf(boxes[i], px[i], py[i]));
   }
@@ -222,14 +319,29 @@ function placeRings(
   for (let i = 0; i < boxes.length; i++) if (level[i] > mainDepth) rim.push(i);
   if (rim.length === 0) return { rimRadius: radius };
 
-  // Component members stay adjacent: they share a level order and a parent.
+  // Tables with no foreign keys ring the rim, shoulder to shoulder. Where a
+  // long chain pokes through the band, `separate` nudges the pair apart.
   rim.sort((a, b) => level[a] - level[b] || parent[a] - parent[b] || a - b);
-  // Measured from the bulk, not from where the last ring happened to end: a
-  // single deep chain of references shouldn't drag the rim out with it. Where a
-  // chain does poke through the band, `separate` nudges the pair apart.
-  radius = Math.max(boxRadius(boxes[hub]) + GAP * 2, bulk + GAP + RING_PADDING);
-  const rimRadius = radius;
-  walkRing(rim);
+  const rimRadius = Math.max(boxRadius(boxes[hub]) + GAP * 2, bulk + GAP + RING_PADDING);
+  let rimRing = rimRadius;
+  let cursor = 0;
+  let lapUsed = 0;
+  let lapTallest = 0;
+  for (const node of rim) {
+    const span = (boxes[node].width + GAP) / rimRing;
+    if (lapUsed > 0 && lapUsed + span > Math.PI * 2) {
+      rimRing += lapTallest + GAP;
+      lapUsed = 0;
+      lapTallest = 0;
+    }
+    const angle = cursor + span / 2;
+    px[node] = rimRing * Math.cos(angle);
+    py[node] = rimRing * Math.sin(angle);
+    cursor += span;
+    lapUsed += span;
+    lapTallest = Math.max(lapTallest, boxes[node].height);
+  }
+
   return { rimRadius };
 }
 
@@ -251,7 +363,7 @@ export function layoutErd(boxes: ErdLayoutBox[], edges: ErdLayoutEdge[], options
 
   const px = new Float64Array(boxes.length);
   const py = new Float64Array(boxes.length);
-  const { rimRadius } = placeRings(boxes, rings, hub, px, py);
+  const { rimRadius } = placeClusters(boxes, rings, hub, px, py);
 
   const nodes: ErdLayoutNode[] = boxes.map((b, i) => ({
     ...b,
