@@ -150,7 +150,7 @@ export const api = {
   },
 
   status() {
-    return request<{ connected: boolean; connectionName: string | null; queryMode: QueryMode | null; dbType: DbType | null }>('/api/connect/status');
+    return request<{ connected: boolean; connectionName: string | null; queryMode: QueryMode | null; dbType: DbType | null; database: string | null }>('/api/connect/status');
   },
 
   schemas() {

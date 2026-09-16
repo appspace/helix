@@ -9,7 +9,7 @@ import { ResultsTable, type QueryResults } from './components/ResultsTable';
 import { ConnectionManager, type ConnectionForm } from './components/ConnectionManager';
 import { api } from './api';
 import type { SchemaData, QueryMode } from './api';
-import { saveConnection } from './savedConnections';
+import { saveConnection, listSavedConnections } from './savedConnections';
 import { electronAPI } from './electronAPI';
 import { addHistoryEntry, listHistory, deleteHistoryEntry, clearHistory, type HistoryEntry } from './queryHistory';
 import { listSavedQueries, saveQuery, deleteSavedQuery, renameSavedQuery, type SavedQuery } from './savedQueries';
@@ -76,6 +76,9 @@ export default function App() {
   }, [themeName]);
 
   const [connected, setConnected] = useState(false);
+  // True until the mount-time session probe settles. Gates the connection
+  // modal so it doesn't flash before we know whether a session is already live.
+  const [restoring, setRestoring] = useState(true);
   const [queryMode, setQueryMode] = useState<QueryMode>('sql');
   const [dbType, setDbType] = useState<DbType | null>(null);
   const [showCreateTable, setShowCreateTable] = useState(false);
@@ -135,6 +138,24 @@ export default function App() {
     setActiveSchema(schema);
   }, []);
 
+  // Restore the user's previous tabs for a connection. We deliberately don't
+  // persist result data (privacy + size); the user re-runs to get fresh rows.
+  // Seeds tabCounter from the highest restored id so new tabs can't collide
+  // with restored ones. No-op when nothing was persisted for this connection.
+  const restorePersistedTabs = useCallback((host: string) => {
+    const persistedTabs = loadTabs(host);
+    if (!persistedTabs) return;
+    setTabs(persistedTabs.tabs);
+    const restoredActive = persistedTabs.tabs.find(t => t.id === persistedTabs.activeTabId)
+      ? persistedTabs.activeTabId
+      : persistedTabs.tabs[0].id;
+    setActiveTab(restoredActive);
+    tabCounter.current = persistedTabs.tabs.reduce(
+      (max, t) => Math.max(max, parseInt(t.id, 10) || 0),
+      0,
+    );
+  }, []);
+
   const handleConnect = async (form: ConnectionForm) => {
     setIsConnecting(true);
     setConnectionError(null);
@@ -155,22 +176,7 @@ export default function App() {
       setSchemas(list);
       setActiveSchema(initial);
 
-      // Restore the user's previous tabs for this connection. We deliberately
-      // don't persist result data (privacy + size); the user re-runs to get
-      // fresh rows. Seed tabCounter from the highest restored id so new tabs
-      // can't collide with restored ones.
-      const persistedTabs = loadTabs(res.connectionName);
-      if (persistedTabs) {
-        setTabs(persistedTabs.tabs);
-        const restoredActive = persistedTabs.tabs.find(t => t.id === persistedTabs.activeTabId)
-          ? persistedTabs.activeTabId
-          : persistedTabs.tabs[0].id;
-        setActiveTab(restoredActive);
-        tabCounter.current = persistedTabs.tabs.reduce(
-          (max, t) => Math.max(max, parseInt(t.id, 10) || 0),
-          0,
-        );
-      }
+      restorePersistedTabs(res.connectionName);
 
       setConnected(true);
       setShowConnectionModal(false);
@@ -495,6 +501,55 @@ export default function App() {
     setThemeName(themeName === 'dark' ? 'light' : 'dark');
   };
 
+  // Adopt a session that's already live on the server.
+  //
+  // The connection lives in the server process, but the UI's knowledge of it
+  // lived only in React state — so any renderer reload (crash, refresh, or a
+  // relaunch where the bundled server outlived the window) dropped the user on
+  // the connection modal while a perfectly good session was still open behind
+  // it, and reconnecting stacked a second pool on top of the first. Ask the
+  // server before deciding the user is logged out.
+  //
+  // This only covers a server that outlived the renderer; a cold start with no
+  // server-side session still falls through to the modal.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const st = await api.status();
+        if (cancelled || !st.connected || !st.connectionName) return;
+
+        const host = st.connectionName;
+        const { schemas: list } = await api.schemas();
+        if (cancelled) return;
+
+        // The server only knows the `user@host:port` label, not the friendly
+        // name the user typed. Recover it from the saved set when one matches;
+        // otherwise show the label (also the mongodb connectionString case,
+        // whose label is built from the URI and won't match a saved entry).
+        const friendly = listSavedConnections()
+          .find(c => `${c.user}@${c.host}:${c.port}` === host)?.name;
+
+        setConnectionName(friendly || host);
+        setConnectionHost(host);
+        setQueryMode(st.queryMode ?? 'sql');
+        setDbType(st.dbType);
+        setHistory(listHistory(host));
+        setSavedQueries(listSavedQueries(host));
+        setSchemas(list);
+        setActiveSchema(st.database && list.includes(st.database) ? st.database : list[0] ?? '');
+        restorePersistedTabs(host);
+        setConnected(true);
+        setShowConnectionModal(false);
+      } catch {
+        // Server unreachable or mid-startup — fall through to the modal.
+      } finally {
+        if (!cancelled) setRestoring(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [restorePersistedTabs]);
+
   // Reload schema when switching schemas from the dropdown
   useEffect(() => {
     if (connected && activeSchema) loadSchema(activeSchema);
@@ -627,7 +682,7 @@ export default function App() {
         </div>
       </div>
 
-      {!connected && showConnectionModal && (
+      {!connected && showConnectionModal && !restoring && (
         <ConnectionManager
           onConnect={handleConnect}
           isConnecting={isConnecting}

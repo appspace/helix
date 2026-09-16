@@ -189,5 +189,9 @@ export const getStatus: RequestHandler = (_req, res) => {
     connectionName: config ? connectionLabel(config) : null,
     queryMode: connected ? getDriver().queryMode : null,
     dbType: config?.type ?? null,
+    // The default schema the session was opened against. The client uses this
+    // to re-select the same schema when restoring a live session after a
+    // renderer reload, rather than falling back to the first schema alphabetically.
+    database: config?.database ?? null,
   });
 };

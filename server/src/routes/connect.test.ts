@@ -11,14 +11,15 @@ vi.mock('../db.js', () => ({
   getDriver: vi.fn().mockReturnValue({ queryMode: 'sql' }),
 }));
 
-import { connect, testConnection } from '../db.js';
-import { postConnect, postTestConnect, friendlyConnectError } from './connect.js';
+import { connect, testConnection, isConnected, getActiveConfig } from '../db.js';
+import { postConnect, postTestConnect, getStatus, friendlyConnectError } from './connect.js';
 
 function makeApp() {
   const app = express();
   app.use(express.json());
   app.post('/api/connect', postConnect);
   app.post('/api/connect/test', postTestConnect);
+  app.get('/api/connect/status', getStatus);
   return app;
 }
 
@@ -174,5 +175,57 @@ describe('friendlyConnectError — MongoDB error mapping', () => {
   it("uses 'MongoDB' in the unknown-error fallback when type is mongodb", () => {
     const msg = friendlyConnectError({}, 'h', 27017, 'mongodb');
     expect(msg).toMatch(/MongoDB/);
+  });
+});
+
+describe('getStatus — session adoption payload', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  // The client restores a live session from this payload after a renderer
+  // reload, so it has to carry enough to rebuild the UI — including the default
+  // schema, or the restore silently lands on the first schema alphabetically.
+  it('reports the active connection, its queryMode, dbType and database', async () => {
+    vi.mocked(isConnected).mockReturnValue(true);
+    vi.mocked(getActiveConfig).mockReturnValue({
+      host: 'h', port: 3307, user: 'u', password: 'p', database: 'emergeit', type: 'mysql',
+    });
+
+    const res = await request(makeApp()).get('/api/connect/status');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      connected: true,
+      connectionName: 'u@h:3307',
+      queryMode: 'sql',
+      dbType: 'mysql',
+      database: 'emergeit',
+    });
+  });
+
+  it('returns database: null when the session has no default schema', async () => {
+    vi.mocked(isConnected).mockReturnValue(true);
+    vi.mocked(getActiveConfig).mockReturnValue({
+      host: 'h', port: 3307, user: 'u', password: 'p', type: 'mysql',
+    });
+
+    const res = await request(makeApp()).get('/api/connect/status');
+
+    expect(res.body.database).toBeNull();
+    expect(res.body.connected).toBe(true);
+  });
+
+  it('reports disconnected with null fields when no session is active', async () => {
+    vi.mocked(isConnected).mockReturnValue(false);
+    vi.mocked(getActiveConfig).mockReturnValue(null);
+
+    const res = await request(makeApp()).get('/api/connect/status');
+
+    expect(res.body).toEqual({
+      connected: false,
+      connectionName: null,
+      queryMode: null,
+      dbType: null,
+      database: null,
+    });
   });
 });
