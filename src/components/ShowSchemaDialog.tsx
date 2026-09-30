@@ -20,19 +20,22 @@ interface ShowSchemaDialogProps {
 }
 
 export function ShowSchemaDialog({ schema, name, type, onClose, t }: ShowSchemaDialogProps) {
-  const [ddl, setDdl] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // The fetch result is tagged with the object it was fetched for, so a change
+  // of target reads back as "loading" without resetting state inside the effect.
+  const target = `${schema}\u0000${name}\u0000${type}`;
+  const [result, setResult] = useState<{ target: string; ddl: string | null; error: string | null } | null>(null);
   const [copied, setCopied] = useState(false);
+  const ddl = result?.target === target ? result.ddl : null;
+  const error = result?.target === target ? result.error : null;
+  const setError = (message: string) => setResult({ target, ddl, error: message });
 
   useEffect(() => {
     let cancelled = false;
-    setDdl(null);
-    setError(null);
     api.tableDdl(schema, name, type)
-      .then(res => { if (!cancelled) setDdl(res.ddl); })
-      .catch(err => { if (!cancelled) setError(err instanceof Error ? err.message : String(err)); });
+      .then(res => { if (!cancelled) setResult({ target, ddl: res.ddl, error: null }); })
+      .catch(err => { if (!cancelled) setResult({ target, ddl: null, error: err instanceof Error ? err.message : String(err) }); });
     return () => { cancelled = true; };
-  }, [schema, name, type]);
+  }, [schema, name, type, target]);
 
   useEffect(() => {
     const key = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };

@@ -552,6 +552,8 @@ export default function App() {
 
   // Reload schema when switching schemas from the dropdown
   useEffect(() => {
+    // loadSchema is an async fetch; its only synchronous state change is the loading flag.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (connected && activeSchema) loadSchema(activeSchema);
   }, [activeSchema, connected, loadSchema]);
 

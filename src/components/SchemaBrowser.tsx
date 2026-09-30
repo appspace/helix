@@ -157,9 +157,10 @@ export function SchemaBrowser({ schema, activeTable, onTableSelect, onSchemaChan
     };
   }, [contextMenu]);
 
+  const confirmDropTable = confirmDrop?.table;
   useEffect(() => {
-    if (confirmDrop) dropInputRef.current?.focus();
-  }, [confirmDrop?.table]);
+    if (confirmDropTable !== undefined) dropInputRef.current?.focus();
+  }, [confirmDropTable]);
 
   const toggle = (key: keyof typeof expanded) => setExpanded(p => ({ ...p, [key]: !p[key] }));
   const toggleTable = (name: string) => setExpandedTables(p => ({ ...p, [name]: !p[name] }));

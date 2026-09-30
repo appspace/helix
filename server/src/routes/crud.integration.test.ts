@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { beforeAll, afterAll, beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import express from 'express';
 import mysql from 'mysql2/promise';
