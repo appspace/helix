@@ -11,6 +11,18 @@ import { getCaretCoordinates } from '../lib/caretPosition';
 
 const LARGE_ROW_THRESHOLD = 5_000;
 
+// Wall-clock "now" for relative timestamps, refreshed periodically so labels
+// don't go stale while a list sits open. Kept in state rather than calling
+// Date.now() during render so the component stays pure.
+function useNow(intervalMs = 30_000): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), intervalMs);
+    return () => clearInterval(id);
+  }, [intervalMs]);
+  return now;
+}
+
 const isMac = /Mac|iPhone|iPod|iPad/i.test(navigator.platform);
 const RUN_SHORTCUT = isMac ? '⌘↵' : 'Ctrl+Enter';
 const FORMAT_SHORTCUT = isMac ? '⇧⌥F' : 'Shift+Alt+F';
@@ -161,7 +173,7 @@ export function QueryEditor({
     setRenamingId(null);
   };
 
-  const now = Date.now();
+  const now = useNow();
 
   const [editorError, setEditorError] = useState<{ kind: 'format' | 'run'; message: string } | null>(null);
 

@@ -138,7 +138,8 @@ export function ConnectionManager({ onConnect, isConnecting, error, t }: Connect
     return () => { cancelled = true; };
   }, []);
 
-  const predicted = useMemo(() => predictDbType(form), [form.connectionString, form.port]);
+  const { connectionString, port } = form;
+  const predicted = useMemo(() => predictDbType({ connectionString, port }), [connectionString, port]);
   const effectiveType: DbType = predicted ?? form.type;
 
   // What we send to the backend. The form's `type` is the predicted one (so
@@ -466,7 +467,17 @@ function ConnectionNameField({ value, onChange, saved, appliedSaved, onSelect, o
 }) {
   const [open, setOpen] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
-  const [highlight, setHighlight] = useState(-1);
+  // The keyboard highlight is scoped to the current list state (input value,
+  // typing mode, open/closed). When any of those change the stored index is
+  // stale and reads back as -1, so no effect-driven reset is needed.
+  const listKey = `${value}\u0000${isTyping}\u0000${open}`;
+  const [highlightState, setHighlightState] = useState<{ key: string; index: number }>({ key: listKey, index: -1 });
+  const highlight = highlightState.key === listKey ? highlightState.index : -1;
+  const setHighlight = (update: number | ((prev: number) => number)) =>
+    setHighlightState(prev => {
+      const current = prev.key === listKey ? prev.index : -1;
+      return { key: listKey, index: typeof update === 'function' ? update(current) : update };
+    });
   const wrapRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -484,7 +495,6 @@ function ConnectionNameField({ value, onChange, saved, appliedSaved, onSelect, o
     ? saved.filter(c => c.name.toLowerCase().includes(value.toLowerCase()))
     : saved;
 
-  useEffect(() => { setHighlight(-1); }, [value, isTyping, open]);
   useEffect(() => {
     if (highlight < 0 || !listRef.current) return;
     const row = listRef.current.children[highlight] as HTMLElement | undefined;

@@ -413,12 +413,14 @@ export function ResultsTable({ results, resultSets, activeResultIndex = 0, onSel
   }, [exportOpen]);
   const editInputRef = useRef<HTMLInputElement | null>(null);
 
+  const editingRow = editing?.row;
+  const editingCol = editing?.col;
   useEffect(() => {
-    if (editing && editInputRef.current) {
+    if (editingRow !== undefined && editInputRef.current) {
       editInputRef.current.focus();
       editInputRef.current.select();
     }
-  }, [editing?.row, editing?.col]);
+  }, [editingRow, editingCol]);
 
   useEffect(() => {
     if (!contextMenu) return;
