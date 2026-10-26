@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import type { CSSProperties } from 'react';
 import type { Theme } from '../theme';
 
-export type SuggestionKind = 'column' | 'table' | 'alias' | 'keyword';
+export type SuggestionKind = 'column' | 'table' | 'alias' | 'keyword' | 'schema';
 
 export interface Suggestion {
   /** Identifier inserted into the editor when accepted. */
@@ -108,6 +108,14 @@ function KindIcon({ kind }: { kind: SuggestionKind }) {
     return (
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="9" y1="4" x2="9" y2="20"/>
+      </svg>
+    );
+  }
+  if (kind === 'schema') {
+    // Same database cylinder as the toolbar's active-schema pill.
+    return (
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
       </svg>
     );
   }
