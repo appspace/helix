@@ -15,7 +15,7 @@
     "test:integration-mongo": "vitest run --config vitest.integration-mongo.config.ts"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "cors": "^2.8.5",
     "express": "^4.22.2",
     "mongodb": "^7.2.0",
@@ -31,7 +31,7 @@
     "supertest": "^7.0.0",
     "tsx": "^4.19.4",
     "typescript": "~6.0.2",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.12"
   },
   "overrides": {
     "qs": "^6.16.0"
