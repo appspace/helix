@@ -74,6 +74,15 @@ describe('tokenizeSql', () => {
   it('treats # as a MySQL line comment', () => {
     expect(significant(tokenizeSql('# hi\nSELECT'))).toEqual([['comment', '# hi'], ['keyword', 'SELECT']]);
   });
+
+  it('treats # as an operator when hash comments are off (Postgres XOR)', () => {
+    const sql = 'SELECT 5 # 3';
+    const tokens = tokenizeSql(sql, { hashComments: false });
+    expect(join(tokens)).toBe(sql);
+    expect(significant(tokens)).toEqual([
+      ['keyword', 'SELECT'], ['number', '5'], ['operator', '#'], ['number', '3'],
+    ]);
+  });
 });
 
 describe('tokenizeJson', () => {

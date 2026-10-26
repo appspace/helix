@@ -642,6 +642,7 @@ export default function App() {
               onExplain={queryMode === 'sql' && dbType === 'mysql' ? handleExplain : undefined}
               isExplaining={currentTab?.isExplaining ?? false}
               queryMode={queryMode}
+              dbType={dbType}
               activeSchema={activeSchema}
               schemas={schemas}
               schemaData={schemaData}

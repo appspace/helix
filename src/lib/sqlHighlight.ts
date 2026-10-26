@@ -47,7 +47,7 @@ const TYPES = new Set([
 const IDENT_START = /[A-Za-z_]/;
 const IDENT_CHAR = /[A-Za-z0-9_$]/;
 const DIGIT = /[0-9]/;
-const OPERATOR_CHARS = '=<>!+-*/%|&^~:';
+const OPERATOR_CHARS = '=<>!+-*/%|&^~:#';
 
 /** Index just past a quoted run starting at `i` (which holds the opening
  *  quote). Handles doubled-quote escapes (`''`) and, for `'`/`"`, backslash
@@ -92,15 +92,21 @@ function push(tokens: Token[], type: TokenType, text: string) {
   else tokens.push({ type, text });
 }
 
-export function tokenizeSql(src: string): Token[] {
+export interface SqlTokenizeOptions {
+  /** Treat `#` as a line comment. True for MySQL; Postgres uses `#` as the
+   *  bitwise-XOR operator. */
+  hashComments?: boolean;
+}
+
+export function tokenizeSql(src: string, { hashComments = true }: SqlTokenizeOptions = {}): Token[] {
   const tokens: Token[] = [];
   let i = 0;
   while (i < src.length) {
     const ch = src[i];
     const next = src[i + 1];
 
-    // Comments: `-- …`, `# …` (MySQL), `/* … */`.
-    if ((ch === '-' && next === '-') || ch === '#') {
+    // Comments: `-- …`, `# …` (MySQL only), `/* … */`.
+    if ((ch === '-' && next === '-') || (ch === '#' && hashComments)) {
       let j = src.indexOf('\n', i);
       if (j < 0) j = src.length;
       push(tokens, 'comment', src.slice(i, j));
