@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { format as formatSql } from 'sql-formatter';
 import type { Theme } from '../theme';
-import type { SchemaData } from '../api';
+import type { DbType, SchemaData } from '../api';
 import type { HistoryEntry } from '../queryHistory';
 import type { SavedQuery } from '../savedQueries';
 import { SuggestionPopup, type Suggestion } from './SuggestionPopup';
@@ -49,6 +49,8 @@ interface QueryEditorProps {
   onExplain?: () => void;
   isExplaining?: boolean;
   queryMode?: 'sql' | 'mql';
+  /** SQL dialect; only affects highlighting (`#` is a comment in MySQL, XOR in Postgres). */
+  dbType?: DbType | null;
   activeSchema: string;
   /** Every schema on the connection; offered as completions in table positions. */
   schemas?: string[];
@@ -94,7 +96,7 @@ const ToolBtn = ({ title, onClick, active, children, t }: { title: string; onCli
 );
 
 export function QueryEditor({
-  value, onChange, onRun, isRunning, onExplain, isExplaining = false, queryMode = 'sql', activeSchema, schemas = [], schemaData, runtimeError,
+  value, onChange, onRun, isRunning, onExplain, isExplaining = false, queryMode = 'sql', dbType, activeSchema, schemas = [], schemaData, runtimeError,
   history = [], onReopenHistory, onDeleteHistoryEntry, onClearHistory,
   savedQueries = [], onSaveQuery, onDeleteSavedQuery, onRenameSavedQuery, onReopenSavedQuery,
   t,
@@ -571,7 +573,11 @@ export function QueryEditor({
   // Replacing the value (tab switch, format) can clamp the textarea's scroll.
   useLayoutEffect(syncHighlightScroll, [value]);
 
-  const tokens = useMemo(() => (isMql ? tokenizeJson(value) : tokenizeSql(value)), [value, isMql]);
+  const hashComments = dbType !== 'postgres';
+  const tokens = useMemo(
+    () => (isMql ? tokenizeJson(value) : tokenizeSql(value, { hashComments })),
+    [value, isMql, hashComments],
+  );
   const tokenColor: Record<TokenType, string> = {
     keyword: t.sqlKeyword, function: t.sqlFunction, type: t.sqlType, string: t.sqlString,
     number: t.sqlNumber, comment: t.sqlComment, operator: t.sqlOperator, identifier: t.sqlTable,
