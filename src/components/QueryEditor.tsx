@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { format as formatSql } from 'sql-formatter';
 import type { Theme } from '../theme';
@@ -8,6 +8,7 @@ import type { SavedQuery } from '../savedQueries';
 import { SuggestionPopup, type Suggestion } from './SuggestionPopup';
 import { extractTableRefs, contextAtCaret, expectedSlot, KEYWORD_GROUPS } from '../lib/sqlContext';
 import { getCaretCoordinates } from '../lib/caretPosition';
+import { tokenizeSql, tokenizeJson, type TokenType } from '../lib/sqlHighlight';
 
 const LARGE_ROW_THRESHOLD = 5_000;
 
@@ -49,6 +50,8 @@ interface QueryEditorProps {
   isExplaining?: boolean;
   queryMode?: 'sql' | 'mql';
   activeSchema: string;
+  /** Every schema on the connection; offered as completions in table positions. */
+  schemas?: string[];
   schemaData?: SchemaData;
   runtimeError?: string | null;
   history?: HistoryEntry[];
@@ -91,7 +94,7 @@ const ToolBtn = ({ title, onClick, active, children, t }: { title: string; onCli
 );
 
 export function QueryEditor({
-  value, onChange, onRun, isRunning, onExplain, isExplaining = false, queryMode = 'sql', activeSchema, schemaData, runtimeError,
+  value, onChange, onRun, isRunning, onExplain, isExplaining = false, queryMode = 'sql', activeSchema, schemas = [], schemaData, runtimeError,
   history = [], onReopenHistory, onDeleteHistoryEntry, onClearHistory,
   savedQueries = [], onSaveQuery, onDeleteSavedQuery, onRenameSavedQuery, onReopenSavedQuery,
   t,
@@ -99,6 +102,7 @@ export function QueryEditor({
   const isMql = queryMode === 'mql';
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const lineNumsRef = useRef<HTMLDivElement>(null);
+  const highlightRef = useRef<HTMLDivElement>(null);
 
   const [historyOpen, setHistoryOpen] = useState(false);
   const historyAnchorRef = useRef<HTMLDivElement>(null);
@@ -303,6 +307,21 @@ export function QueryEditor({
     return schema.tables.find(x => x.name.toLowerCase() === ql) ?? null;
   };
 
+  const tableSuggestions = (schema: SchemaData): Suggestion[] => [
+    ...schema.tables.map(t => ({
+      kind: 'table' as const,
+      insert: t.name,
+      label: t.name,
+      detail: `${t.columns.length} cols`,
+    })),
+    ...schema.views.map(v => ({
+      kind: 'table' as const,
+      insert: v,
+      label: v,
+      detail: 'view',
+    })),
+  ];
+
   const refreshSuggestions = (text: string, caret: number) => {
     if (isMql) { setSuggestions(null); return; }
     const ctx = contextAtCaret(text, caret);
@@ -321,13 +340,20 @@ export function QueryEditor({
     if (ctx.qualifier) {
       // Qualified prefix is always column-only — bypass slot inspection.
       const table = resolveQualifier(ctx.qualifier, schemaData, refs);
-      if (!table) { setSuggestions(null); return; }
-      items = table.columns.map(c => ({
-        kind: 'column' as const,
-        insert: c.name,
-        label: c.name,
-        detail: c.type,
-      }));
+      if (table) {
+        items = table.columns.map(c => ({
+          kind: 'column' as const,
+          insert: c.name,
+          label: c.name,
+          detail: c.type,
+        }));
+      } else if (schemaData && ctx.qualifier.toLowerCase() === activeSchema.toLowerCase()) {
+        // `schema.tbl` — only the active schema's objects are loaded, so a
+        // qualifier naming any other schema gets no suggestions.
+        items = tableSuggestions(schemaData);
+      } else {
+        setSuggestions(null); return;
+      }
     } else {
       // Keywords first when the slot expects them. Statement-starter slots
       // get *only* keywords so the user isn't shown a column list while typing
@@ -378,13 +404,14 @@ export function QueryEditor({
           });
         }
       }
-      if (slot.tables && schemaData) {
-        for (const t of schemaData.tables) {
+      if (slot.tables && schemaData) items.push(...tableSuggestions(schemaData));
+      if (slot.tables) {
+        for (const name of schemas) {
           items.push({
-            kind: 'table',
-            insert: t.name,
-            label: t.name,
-            detail: `${t.columns.length} cols`,
+            kind: 'schema',
+            insert: name,
+            label: name,
+            detail: name === activeSchema ? 'schema · active' : 'schema',
           });
         }
       }
@@ -514,7 +541,16 @@ export function QueryEditor({
     editorWrap: { flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 } as CSSProperties,
     lineNums: { background: t.bgToolbar, borderRight: `1px solid ${t.borderSubtle}`, padding: '12px 0', minWidth: 40, textAlign: 'right', userSelect: 'none', flexShrink: 0, overflowY: 'hidden' } as CSSProperties,
     lineNum: { padding: '0 10px', fontSize: 11, lineHeight: '21px', color: t.textMuted, fontFamily: '"JetBrains Mono", monospace' } as CSSProperties,
-    textarea: { flex: 1, background: 'transparent', border: 'none', outline: 'none', resize: 'none', padding: '12px 16px', color: t.textPrimary, fontFamily: '"JetBrains Mono", monospace', fontSize: 13, lineHeight: '21px', caretColor: t.accent, overflowY: 'auto' } as CSSProperties,
+    // The textarea and the highlight layer behind it must lay text out
+    // identically, so they share these metrics. Lines don't soft-wrap: the
+    // two boxes differ in width by the textarea's scrollbar, and wrapping
+    // would let them break lines at different points.
+    editorText: { margin: 0, padding: '12px 16px', fontFamily: '"JetBrains Mono", monospace', fontSize: 13, lineHeight: '21px', whiteSpace: 'pre', fontVariantLigatures: 'none' } as CSSProperties,
+    textArea: { flex: 1, position: 'relative', minWidth: 0, display: 'flex' } as CSSProperties,
+    highlight: { position: 'absolute', inset: 0, overflow: 'hidden', pointerEvents: 'none' } as CSSProperties,
+    // Text is transparent so only the highlight layer's glyphs show; the caret
+    // and selection still come from the textarea.
+    textarea: { flex: 1, background: 'transparent', border: 'none', outline: 'none', resize: 'none', color: 'transparent', caretColor: t.accent, overflow: 'auto' } as CSSProperties,
     panel: {
       position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 100,
       width: 440, maxHeight: 400, overflowY: 'auto',
@@ -525,6 +561,22 @@ export function QueryEditor({
   };
 
   const largeTableWarn = isMql ? null : detectLargeTable(value, schemaData);
+
+  // The highlight layer can't scroll itself (it has no scrollbar, so its
+  // scroll range differs from the textarea's); it's translated instead.
+  const syncHighlightScroll = () => {
+    const ta = textareaRef.current, hl = highlightRef.current;
+    if (ta && hl) hl.style.transform = `translate(${-ta.scrollLeft}px, ${-ta.scrollTop}px)`;
+  };
+  // Replacing the value (tab switch, format) can clamp the textarea's scroll.
+  useLayoutEffect(syncHighlightScroll, [value]);
+
+  const tokens = useMemo(() => (isMql ? tokenizeJson(value) : tokenizeSql(value)), [value, isMql]);
+  const tokenColor: Record<TokenType, string> = {
+    keyword: t.sqlKeyword, function: t.sqlFunction, type: t.sqlType, string: t.sqlString,
+    number: t.sqlNumber, comment: t.sqlComment, operator: t.sqlOperator, identifier: t.sqlTable,
+    plain: t.textPrimary,
+  };
 
   return (
     <div style={s.root}>
@@ -926,6 +978,14 @@ export function QueryEditor({
             <div key={i} style={s.lineNum}>{i + 1}</div>
           ))}
         </div>
+        <div style={s.textArea}>
+        <div style={s.highlight} aria-hidden="true">
+          <div ref={highlightRef} style={{ ...s.editorText, color: t.textPrimary }}>
+            {tokens.map((tok, i) => tok.type === 'plain'
+              ? tok.text
+              : <span key={i} style={{ color: tokenColor[tok.type] }}>{tok.text}</span>)}
+          </div>
+        </div>
         <textarea
           ref={textareaRef}
           value={value}
@@ -949,6 +1009,7 @@ export function QueryEditor({
             // Keep the line-number gutter aligned with the textarea now that
             // the textarea scrolls internally instead of the whole editor.
             if (lineNumsRef.current) lineNumsRef.current.scrollTop = e.currentTarget.scrollTop;
+            syncHighlightScroll();
           }}
           onBlur={() => {
             // Defer so a click on the popup row (which calls acceptSuggestion)
@@ -956,10 +1017,11 @@ export function QueryEditor({
             setTimeout(() => setSuggestions(null), 100);
           }}
           onKeyDown={handleKeyDown}
-          style={s.textarea}
+          style={{ ...s.editorText, ...s.textarea }}
           spellCheck={false}
           autoComplete="off"
         />
+        </div>
         {suggestions && (
           <SuggestionPopup
             items={suggestions.items}

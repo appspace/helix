@@ -643,6 +643,7 @@ export default function App() {
               isExplaining={currentTab?.isExplaining ?? false}
               queryMode={queryMode}
               activeSchema={activeSchema}
+              schemas={schemas}
               schemaData={schemaData}
               runtimeError={queryError}
               history={history}
