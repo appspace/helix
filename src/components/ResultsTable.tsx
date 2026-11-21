@@ -505,6 +505,19 @@ export function ResultsTable({ results, resultSets, activeResultIndex = 0, onSel
     return flattenRowsForDisplay(results.columns, results.rows);
   }, [results]);
 
+  // Flattening clones every row, so a displayed row is no longer the object the
+  // parent holds in `results.rows`. The CRUD callbacks patch the parent's rows
+  // by identity, so hand them the source row rather than the display clone.
+  // (Not Mongo-only: SQL JSON columns arrive as objects and get flattened too.)
+  const sourceRowOf = useMemo(() => {
+    const map = new Map<object, Row>();
+    if (results && flattened && flattened.rows !== results.rows) {
+      flattened.rows.forEach((r, i) => map.set(r, results.rows[i] as Row));
+    }
+    return map;
+  }, [results, flattened]);
+  const toSourceRow = (row: Row): Row => sourceRowOf.get(row) ?? row;
+
   // Sync column order/widths when the result set changes
   useEffect(() => {
     if (!flattened) { setColOrder([]); setColWidths({}); return; }
@@ -1432,7 +1445,7 @@ export function ResultsTable({ results, resultSets, activeResultIndex = 0, onSel
                   setDeleting(true);
                   setDeleteError(null);
                   try {
-                    await onDeleteRow(confirmDelete.row, confirmDelete.target);
+                    await onDeleteRow(toSourceRow(confirmDelete.row), confirmDelete.target);
                     setConfirmDelete(null);
                     setSelectedRow(null);
                   } catch (err) {
@@ -1503,7 +1516,7 @@ export function ResultsTable({ results, resultSets, activeResultIndex = 0, onSel
                   if (!onUpdateCell) { setConfirmUpdate(null); return; }
                   setConfirmUpdate(prev => prev ? { ...prev, saving: true, error: null } : prev);
                   try {
-                    await onUpdateCell(confirmUpdate.row, confirmUpdate.target);
+                    await onUpdateCell(toSourceRow(confirmUpdate.row), confirmUpdate.target);
                     setConfirmUpdate(null);
                     setEditing(null);
                   } catch (err) {
