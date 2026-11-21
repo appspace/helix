@@ -294,7 +294,8 @@ export default function App() {
       if (tb.id !== targetTab || !tb.results) return tb;
       const meta = tb.results.columnMeta?.find(m => m.orgTable === target.table && m.orgName === target.column);
       const key = meta?.name ?? target.column;
-      return { ...tb, results: { ...tb.results, rows: tb.results.rows.map(r => r === row ? { ...r, [key]: target.value } : r) } };
+      const next = { ...tb.results, rows: tb.results.rows.map(r => r === row ? { ...r, [key]: target.value } : r) };
+      return { ...tb, results: next, resultSets: tb.resultSets?.map(rs => rs === tb.results ? next : rs) };
     }));
   };
 
@@ -307,9 +308,11 @@ export default function App() {
     if (result.affectedRows === 0) {
       throw new Error('No rows were deleted (row may have already been removed).');
     }
-    setTabs(ts => ts.map(tb => tb.id === targetTab && tb.results
-      ? { ...tb, results: { ...tb.results, rows: tb.results.rows.filter(r => r !== row) } }
-      : tb));
+    setTabs(ts => ts.map(tb => {
+      if (tb.id !== targetTab || !tb.results) return tb;
+      const next = { ...tb.results, rows: tb.results.rows.filter(r => r !== row) };
+      return { ...tb, results: next, resultSets: tb.resultSets?.map(rs => rs === tb.results ? next : rs) };
+    }));
   };
 
   const handleRun = async () => {
